@@ -2,6 +2,12 @@
 from __future__ import annotations
 import numpy as np
 
+from config import ScenarioConfig
+from src.baselines.repair import repair_clusters_split_until_feasible
+from src.evaluator import evaluate_cluster
+from src.helper import summarize
+from src.models import Users
+
 
 def _weighted_choice(rng: np.random.Generator, probs: np.ndarray) -> int:
     probs = np.asarray(probs, dtype=float)
@@ -115,3 +121,64 @@ def labels_to_clusters(labels: np.ndarray, K: int) -> list[np.ndarray]:
     for k in range(K):
         clusters.append(np.where(labels == k)[0].astype(int))
     return clusters
+
+def run_weighted_kmeans_baseline(users: Users, cfg: ScenarioConfig, K_ref: int, use_qos_weight: bool):
+    """
+    Baseline: weighted k-means++ with fixed K, then repair by splitting infeasible clusters.
+
+    IMPORTANT: Evaluate fixed-K clusters using k-means centers:
+      - center_xy_override = k-means center (weighted centroid in XY)
+      - center_ecef_override = weighted mean in ECEF using same sample_w
+    """
+    if use_qos_weight:
+        sample_w = users.demand_mbps * users.qos_w
+        name = "WKMeans++ (weights=demand*qos)"
+    else:
+        sample_w = users.demand_mbps
+        name = "WKMeans++ (weights=demand)"
+
+    labels, centers = weighted_kmeans(
+        X=users.xy_m,
+        K=K_ref,
+        sample_w=sample_w,
+        n_iter=50,
+        seed=cfg.seed + 999,
+    )
+    clusters = labels_to_clusters(labels, K_ref)
+
+    # Evaluate fixed-K using baseline-true centers
+    evals = []
+    for k, S in enumerate(clusters):
+        c_xy = centers[k]
+
+        wk = np.maximum(sample_w[S].astype(float), 0.0)
+        sw = float(wk.sum())
+        if sw > 0:
+            c_ecef = (users.ecef_m[S] * wk[:, None]).sum(axis=0) / sw
+        else:
+            c_ecef = users.ecef_m[S].mean(axis=0)
+
+        ev = evaluate_cluster(
+            users, S, cfg,
+            center_xy_override=c_xy,
+            center_ecef_override=c_ecef
+        )
+        evals.append(ev)
+
+    fixed_summary = summarize(users, cfg, clusters, evals)
+
+    # Repair (kept as-is; after splitting, k-means centers don't apply anymore)
+    clusters_rep, evals_rep, rep_stats = repair_clusters_split_until_feasible(
+        users=users,
+        cfg=cfg,
+        clusters=clusters,
+        max_total_clusters=8000,
+    )
+    rep_summary = summarize(users, cfg, clusters_rep, evals_rep)
+
+    return {
+        "name": name,
+        "fixedK": {"clusters": clusters, "evals": evals, "summary": fixed_summary},
+        "repaired": {"clusters": clusters_rep, "evals": evals_rep, "summary": rep_summary},
+        "repair_stats": rep_stats,
+    }

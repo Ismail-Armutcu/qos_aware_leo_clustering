@@ -18,7 +18,7 @@ DEBUG_BBOX = BBox(39.5, 40.3, 32.3, 33.3)
 class ScenarioConfig:
     region_mode: Literal["debug", "turkey"] = "turkey"
 
-    n_users: int = 2500
+    n_users: int = 250
     seed: int = 1
 
     sat_altitude_m: float = 600_000.0

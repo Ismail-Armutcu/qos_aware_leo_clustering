@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from config import ScenarioConfig
-from src.usergen import generate_users
+from src.usergen import generate_users, build_users_container
 from src.coords import llh_to_ecef
 from src.models import Users
 from src.pipeline import split_to_feasible
@@ -14,39 +14,6 @@ from src.plot import plot_clusters_overlay
 
 from src.baselines.weighted_kmeans import weighted_kmeans, labels_to_clusters
 from src.baselines.repair import repair_clusters_split_until_feasible
-
-
-def build_users_container(user_list, cfg: ScenarioConfig) -> Users:
-    """
-    Pack list[User] into vectorized Users container + precompute sat->user geometry.
-    """
-    lat = np.array([u.lat_deg for u in user_list], dtype=float)
-    lon = np.array([u.lon_deg for u in user_list], dtype=float)
-    xy = np.stack([u.xy_m for u in user_list], axis=0).astype(float)
-    ecef = np.stack([u.ecef_m for u in user_list], axis=0).astype(float)
-    demand = np.array([u.demand_mbps for u in user_list], dtype=float)
-    qos = np.array([u.qos_w for u in user_list], dtype=int)
-
-    # Satellite ECEF: above bbox center at configured altitude
-    sat_ecef = llh_to_ecef(cfg.lat0_deg, cfg.lon0_deg, cfg.sat_altitude_m).astype(float)
-
-    # Precompute sat->user geometry
-    vec = ecef - sat_ecef[None, :]
-    rng_m = np.linalg.norm(vec, axis=1)
-    u_sat2user = vec / (rng_m[:, None] + 1e-12)
-
-    return Users(
-        users=user_list,
-        lat_deg=lat,
-        lon_deg=lon,
-        xy_m=xy,
-        ecef_m=ecef,
-        demand_mbps=demand,
-        qos_w=qos,
-        sat_ecef_m=sat_ecef,
-        range_m=rng_m,
-        u_sat2user=u_sat2user,
-    )
 
 
 def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
@@ -136,7 +103,11 @@ def print_summary(title: str, s: dict, cfg: ScenarioConfig):
 
 def run_weighted_kmeans_baseline(users: Users, cfg: ScenarioConfig, K_ref: int, use_qos_weight: bool):
     """
-    Baseline: weighted k-means++ with fixed K, then optional repair by splitting infeasible clusters.
+    Baseline: weighted k-means++ with fixed K, then repair by splitting infeasible clusters.
+
+    IMPORTANT: Evaluate fixed-K clusters using k-means centers:
+      - center_xy_override = k-means center (weighted centroid in XY)
+      - center_ecef_override = weighted mean in ECEF using same sample_w
     """
     if use_qos_weight:
         sample_w = users.demand_mbps * users.qos_w
@@ -145,7 +116,7 @@ def run_weighted_kmeans_baseline(users: Users, cfg: ScenarioConfig, K_ref: int, 
         sample_w = users.demand_mbps
         name = "WKMeans++ (weights=demand)"
 
-    labels, _centers = weighted_kmeans(
+    labels, centers = weighted_kmeans(
         X=users.xy_m,
         K=K_ref,
         sample_w=sample_w,
@@ -153,10 +124,29 @@ def run_weighted_kmeans_baseline(users: Users, cfg: ScenarioConfig, K_ref: int, 
         seed=cfg.seed + 999,
     )
     clusters = labels_to_clusters(labels, K_ref)
-    evals = [evaluate_cluster(users, S, cfg) for S in clusters]
+
+    # Evaluate fixed-K using baseline-true centers
+    evals = []
+    for k, S in enumerate(clusters):
+        c_xy = centers[k]
+
+        wk = np.maximum(sample_w[S].astype(float), 0.0)
+        sw = float(wk.sum())
+        if sw > 0:
+            c_ecef = (users.ecef_m[S] * wk[:, None]).sum(axis=0) / sw
+        else:
+            c_ecef = users.ecef_m[S].mean(axis=0)
+
+        ev = evaluate_cluster(
+            users, S, cfg,
+            center_xy_override=c_xy,
+            center_ecef_override=c_ecef
+        )
+        evals.append(ev)
+
     fixed_summary = summarize(users, cfg, clusters, evals)
 
-    # Repair (split infeasible clusters until feasible)
+    # Repair (kept as-is; after splitting, k-means centers don't apply anymore)
     clusters_rep, evals_rep, rep_stats = repair_clusters_split_until_feasible(
         users=users,
         cfg=cfg,

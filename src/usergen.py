@@ -2,8 +2,9 @@
 from __future__ import annotations
 import numpy as np
 
+from config import ScenarioConfig
 from src.coords import ll_to_local_xy_m, llh_to_ecef
-from src.models import User
+from src.models import User, Users
 
 
 def local_xy_to_ll_deg(xy_m: np.ndarray, lat0_deg: float, lon0_deg: float) -> tuple[np.ndarray, np.ndarray]:
@@ -177,3 +178,35 @@ def generate_users(cfg) -> list[User]:
         )
 
     return users
+
+def build_users_container(user_list, cfg: ScenarioConfig) -> Users:
+    """
+    Pack list[User] into vectorized Users container + precompute sat->user geometry.
+    """
+    lat = np.array([u.lat_deg for u in user_list], dtype=float)
+    lon = np.array([u.lon_deg for u in user_list], dtype=float)
+    xy = np.stack([u.xy_m for u in user_list], axis=0).astype(float)
+    ecef = np.stack([u.ecef_m for u in user_list], axis=0).astype(float)
+    demand = np.array([u.demand_mbps for u in user_list], dtype=float)
+    qos = np.array([u.qos_w for u in user_list], dtype=int)
+
+    # Satellite ECEF: above bbox center at configured altitude
+    sat_ecef = llh_to_ecef(cfg.lat0_deg, cfg.lon0_deg, cfg.sat_altitude_m).astype(float)
+
+    # Precompute sat->user geometry
+    vec = ecef - sat_ecef[None, :]
+    rng_m = np.linalg.norm(vec, axis=1)
+    u_sat2user = vec / (rng_m[:, None] + 1e-12)
+
+    return Users(
+        users=user_list,
+        lat_deg=lat,
+        lon_deg=lon,
+        xy_m=xy,
+        ecef_m=ecef,
+        demand_mbps=demand,
+        qos_w=qos,
+        sat_ecef_m=sat_ecef,
+        range_m=rng_m,
+        u_sat2user=u_sat2user,
+    )

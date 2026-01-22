@@ -1,6 +1,8 @@
 from config import ScenarioConfig
 from src.models import Users
 import numpy as np
+from typing import Any
+import csv
 
 def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
     """
@@ -85,3 +87,44 @@ def print_summary(title: str, s: dict, cfg: ScenarioConfig):
     print(f"Enterprise z: mean={s['ent_z_mean']:.3f}, p90={s['ent_z_p90']:.3f}, max={s['ent_z_max']:.3f}")
 
     print(f"Total enterprise risk (soft): {s['risk_sum']:.3f}")
+
+
+# ----------------------------
+# Helpers for sweep output
+# ----------------------------
+def flatten_summary(prefix: str, s: dict[str, Any]) -> dict[str, Any]:
+    return {f"{prefix}_{k}": v for k, v in s.items()}
+
+def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
+    # scenario columns
+    row = {
+        "seed": rec["seed"],
+        "region_mode": rec["region_mode"],
+        "n_users": rec["n_users"],
+        "use_hotspots": rec["use_hotspots"],
+        "n_hotspots": rec["n_hotspots"],
+        "noise_frac": rec["noise_frac"],
+        "sigma_min": rec["sigma_min"],
+        "sigma_max": rec["sigma_max"],
+        "rho_safe": rec["rho_safe"],
+        "eirp_dbw": rec["eirp_dbw"],
+        "bandwidth_hz": rec["bandwidth_hz"],
+        "radius_modes_km": str(rec["radius_modes_km"]),
+    }
+    # algorithm KPIs
+    row |= flatten_summary("main", rec["main"])
+    row |= flatten_summary("main_ref", rec["main_ref"])
+    row |= flatten_summary("wk_demand_fixed", rec["wk_demand_fixed"])
+    row |= flatten_summary("wk_demand_rep", rec["wk_demand_rep"])
+    row |= flatten_summary("wk_qos_fixed", rec["wk_qos_fixed"])
+    row |= flatten_summary("wk_qos_rep", rec["wk_qos_rep"])
+    return row
+
+def write_csv(path: str, rows: list[dict[str, Any]]):
+    if not rows:
+        return
+    fieldnames = sorted(rows[0].keys())
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)

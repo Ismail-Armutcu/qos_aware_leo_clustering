@@ -43,6 +43,12 @@ class ScenarioConfig:
     qos_refine_kcand: int = 6
     qos_refine_max_moves_per_round: int = 2000
 
+    # Plotting
+    enable_plots: bool = True
+
+    # Logging
+    verbose: bool = True
+
     # Hotspot + noise user generator
     use_hotspots: bool = True
     n_hotspots: int = 10

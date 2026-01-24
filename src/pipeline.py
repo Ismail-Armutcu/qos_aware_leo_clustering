@@ -4,9 +4,10 @@ import numpy as np
 from config import ScenarioConfig
 from src.baselines.weighted_kmeans import run_weighted_kmeans_baseline
 from src.evaluator import evaluate_cluster
-from src.helper import summarize, print_summary
+from src.helper import summarize, print_summary, print_config
 from src.plot import plot_clusters_overlay
 from src.refine_qos_angle import refine_enterprise_by_angle
+from src.refine_load_balance import refine_load_balance_by_overlap
 from src.split import split_farthest
 from typing import Any
 
@@ -63,6 +64,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     # ------------------------------------
     # 2) Main algorithm: split-to-feasible
     # ------------------------------------
+    print_config(cfg)
     clusters, evals = split_to_feasible(users, cfg)
     main_summary = summarize(users, cfg, clusters, evals)
     if cfg.run.verbose:
@@ -102,6 +104,26 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             draw_centers=True,
             max_circles=250,
         )
+    # -----------------------------
+    # Refinement: load balance
+    # -----------------------------
+    clusters_lb, evals_lb, lb_stats = refine_load_balance_by_overlap(users, cfg, clusters_ref, evals_ref)
+    lb_summary = summarize(users, cfg, clusters_lb, evals_lb)
+    if cfg.run.verbose:
+        print("\nLoad-balance refinement stats:", lb_stats)
+        print_summary("Main + enterprise refine + load-balance refine", lb_summary, cfg)
+    if cfg.run.enable_plots:
+        plot_clusters_overlay(
+            users_xy_m=users.xy_m,
+            qos_w=users.qos_w,
+            clusters=clusters_lb,
+            evals=evals_lb,
+            title=f"Main + QoS refine + LB refine (K={len(clusters_lb)})",
+            draw_circles=True,
+            draw_centers=True,
+            max_circles=250,
+        )
+
     # ---------------------------------------------
     # 3) Baselines: WKMeans++ fixed-K then repair
     # ---------------------------------------------
@@ -184,6 +206,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         "radius_modes_km": cfg.beam.radius_modes_km,
         "main": main_summary,
         "main_ref": ref_summary,
+        "main_ref_lb": lb_summary,
         "wk_demand_fixed": baseline_without_qos["fixedK"]["summary"],
         "wk_demand_rep": baseline_without_qos["repaired"]["summary"],
         "wk_qos_fixed": baseline_with_qos["fixedK"]["summary"],

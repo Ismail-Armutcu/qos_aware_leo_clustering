@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor `pipeline.py` to modularize scenario execution logic and introduce `run_scenario`. Streamline `main.py` for parallel processing and CSV export. Add sweep helper utilities to `helper.py`." />
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor configuration system to introduce grouped blocks for modularity. Update all modules to use the new config structure with hierarchical access patterns." />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -168,7 +168,8 @@
     <MESSAGE value="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`." />
     <MESSAGE value="Refactor `weighted_kmeans` logic and move `summarize` and `print_summary` to `helper.py`." />
     <MESSAGE value="Refactor `pipeline.py` to modularize scenario execution logic and introduce `run_scenario`. Streamline `main.py` for parallel processing and CSV export. Add sweep helper utilities to `helper.py`." />
-    <option name="LAST_COMMIT_MESSAGE" value="Refactor `pipeline.py` to modularize scenario execution logic and introduce `run_scenario`. Streamline `main.py` for parallel processing and CSV export. Add sweep helper utilities to `helper.py`." />
+    <MESSAGE value="Refactor configuration system to introduce grouped blocks for modularity. Update all modules to use the new config structure with hierarchical access patterns." />
+    <option name="LAST_COMMIT_MESSAGE" value="Refactor configuration system to introduce grouped blocks for modularity. Update all modules to use the new config structure with hierarchical access patterns." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

@@ -49,7 +49,7 @@ class EnterpriseConfig:
 @dataclass(frozen=True)
 class TrafficConfig:
     # Demand distribution + QoS class ratios
-    demand_logn_mean: float = 5.0
+    demand_mbps_median: float = 5.0
     demand_logn_sigma: float = 0.6
     qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)  # eco/std/ent
 
@@ -62,25 +62,35 @@ class QoSRefineConfig:
     max_moves_per_round: int = 2000
 
 
+# ----------------------------
+# Config (nested under cfg.lb_refine)
+# ----------------------------
 @dataclass(frozen=True)
 class LoadBalanceRefineConfig:
-    """
-    Stage-2 refinement: load balancing via moves across intersecting beams.
-    """
     enabled: bool = True
-
     rounds: int = 3
-    tau: float = 0.85  # overloaded threshold on U
-    max_moves_per_round: int = 2000
-
-    # Candidate limits
-    kcand_neighbors: int = 6       # how many intersecting neighbors to try
-    user_cand_per_beam: int = 30   # how many users to try moving from an overloaded beam
-
-    # Policy knobs
-    protect_enterprise: bool = True       # do not worsen ent exposure/risk
-    allow_enterprise_moves: bool = False  # if False, only move non-enterprise users
-    improve_global_umax: bool = True      # if True, reject moves that increase global Umax
+    # How many attempted moves per round (upper bound)
+    max_moves_per_round: int = 3000
+    # For each donor cluster, how many receiver clusters to consider (by adjacency+best utility)
+    k_receivers: int = 8
+    # Within a donor cluster, only consider up to this many candidate users for moving
+    k_users_from_donor: int = 30
+    # Only allow moves between beams whose circles overlap (intersect)
+    # dist(center_i, center_j) <= (R_i + R_j + intersect_margin_m)
+    intersect_margin_m: float = 0.0
+    # Objective: reduce imbalance; you can choose "range" (max-min) or "var" (variance)
+    objective: str = "range"  # "range" or "var"
+    # Optional: don’t touch enterprise users unless needed
+    prefer_non_enterprise: bool = True
+    # Guard against making enterprise risk worse
+    # Accept move if (risk_after <= risk_before + risk_slack)
+    risk_slack: float = 1e-9
+    # Also guard enterprise exposure count (z>rho) from increasing too much
+    # Accept move if (exposed_after <= exposed_before + exposure_slack)
+    exposure_slack: int = 0
+    # If True, allow receiver to be slightly higher utilization as long as imbalance improves.
+    allow_receiver_close_to_full: bool = False
+    receiver_u_max: float = 0.95  # used if allow_receiver_close_to_full is False
 
 
 @dataclass(frozen=True)

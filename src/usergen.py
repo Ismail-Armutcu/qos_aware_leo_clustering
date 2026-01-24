@@ -72,9 +72,10 @@ def generate_users(cfg: ScenarioConfig) -> list[User]:
 
     # --- Demand and QoS assignment ---
     # (Note: lognormal in numpy uses underlying normal mean/sigma. Keep your existing semantics.)
-    mu = float(cfg.traffic.demand_logn_mean)
-    sigma = float(cfg.traffic.demand_logn_sigma)
-    demand = rng.lognormal(mean=mu, sigma=sigma, size=N).astype(float)
+    median = cfg.traffic.demand_mbps_median
+    sigma = cfg.traffic.demand_logn_sigma
+    mu = np.log(max(median, 1e-9))
+    demand = rng.lognormal(mean=mu, sigma=sigma, size=N)
 
     qos_probs = np.asarray(cfg.traffic.qos_probs, dtype=float)
     qos_probs = qos_probs / (qos_probs.sum() + 1e-12)

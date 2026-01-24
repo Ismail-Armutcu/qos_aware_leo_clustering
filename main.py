@@ -8,6 +8,7 @@ import multiprocessing as mp
 from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
+import time
 
 
 def worker(cfg: ScenarioConfig) -> dict[str, Any]:
@@ -26,6 +27,49 @@ def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) 
             rows.append(fut.result())
     return rows
 
+# def _fmt_hms(sec: float) -> str:
+#     sec = max(0.0, float(sec))
+#     h = int(sec // 3600)
+#     m = int((sec % 3600) // 60)
+#     s = int(sec % 60)
+#     if h > 0:
+#         return f"{h:d}h {m:02d}m {s:02d}s"
+#     return f"{m:d}m {s:02d}s"
+#
+# def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) -> list[dict[str, Any]]:
+#     if max_workers is None:
+#         max_workers = max(1, (os.cpu_count() or 4) - 1)
+#
+#     total = len(configs)
+#     if total == 0:
+#         return []
+#
+#     rows: list[dict[str, Any]] = []
+#     t0 = time.time()
+#     done = 0
+#     last_print = 0.0
+#     print_every_sec = 1.0  # throttle prints
+#
+#     with ProcessPoolExecutor(max_workers=max_workers) as ex:
+#         futs = [ex.submit(worker, cfg) for cfg in configs]
+#
+#         for fut in as_completed(futs):
+#             rows.append(fut.result())
+#             done += 1
+#
+#             now = time.time()
+#             if (now - last_print) >= print_every_sec or done == total:
+#                 elapsed = now - t0
+#                 rate = done / max(elapsed, 1e-9)
+#                 eta = (total - done) / max(rate, 1e-9)
+#
+#                 pct = 100.0 * done / total
+#                 print(f"[{done:>4d}/{total}] {pct:6.2f}% | elapsed={_fmt_hms(elapsed)} | eta={_fmt_hms(eta)}")
+#                 last_print = now
+#
+#     return rows
+
+
 
 
 def main():
@@ -34,7 +78,7 @@ def main():
     # -------------------------
     # Phase A: robustness sweep
     # -------------------------
-    seeds = list(range(1, 21))
+    seeds = list(range(1, 11))
 
     configs = []
     for s in seeds:
@@ -50,12 +94,16 @@ def main():
             ),
             usergen=replace(
                 base.usergen,
-                enabled=True,              # (you renamed use_hotspots -> enabled)
+                enabled=True,
                 n_hotspots=10,
                 hotspot_sigma_m_min=5_000.0,
                 hotspot_sigma_m_max=30_000.0,
                 noise_frac=0.15,
             ),
+            lb_refine=replace(
+                base.lb_refine,
+                enabled=True
+            )
         )
         configs.append(cfg)
 
@@ -71,7 +119,7 @@ def main():
     # Phase B: scaling sweep
     # -------------------------
     n_users_list = [1000, 2500, 5000, 10000]
-    seeds_b = list(range(1, 11))
+    seeds_b = list(range(1, 5))
 
     configs_b = []
     for n in n_users_list:

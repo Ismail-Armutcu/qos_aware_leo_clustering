@@ -43,7 +43,7 @@ def split_to_feasible(users, cfg, max_clusters: int = 5000):
 
         # Split the bad cluster
         S = clusters.pop(bad_idx)
-        S1, S2 = split_farthest(users.xy_m, S, seed=cfg.seed + len(clusters) + 1)
+        S1, S2 = split_farthest(users.xy_m, S, seed=cfg.run.seed + len(clusters) + 1)
         clusters.append(S1)
         clusters.append(S2)
 
@@ -55,19 +55,19 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     # ---------------------------
     user_list = generate_users(cfg)
     users = build_users_container(user_list, cfg)
-    if cfg.verbose:
+    if cfg.run.verbose:
         print(f"Generated {users.n} users in {cfg.region_mode} bbox.")
-        print(f"Satellite altitude: {cfg.sat_altitude_m / 1000:.0f} km")
+        print(f"Satellite altitude: {cfg.phy.sat_altitude_m / 1000:.0f} km")
         print(
-            f"Beam modes (km): {cfg.radius_modes_km}, B={cfg.bandwidth_hz / 1e6:.0f} MHz, EIRP={cfg.eirp_dbw:.1f} dBW")
+            f"Beam modes (km): {cfg.beam.radius_modes_km}, B={cfg.phy.bandwidth_hz / 1e6:.0f} MHz, EIRP={cfg.phy.eirp_dbw:.1f} dBW")
     # ------------------------------------
     # 2) Main algorithm: split-to-feasible
     # ------------------------------------
     clusters, evals = split_to_feasible(users, cfg)
     main_summary = summarize(users, cfg, clusters, evals)
-    if cfg.verbose:
+    if cfg.run.verbose:
         print_summary("Main algorithm (split-to-feasible)", main_summary, cfg)
-    if cfg.enable_plots:
+    if cfg.run.enable_plots:
         plot_clusters_overlay(
             users_xy_m=users.xy_m,
             qos_w=users.qos_w,
@@ -83,15 +83,15 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     # -----------------------------
     clusters_ref, evals_ref, ref_stats = refine_enterprise_by_angle(
         users, cfg, clusters, evals,
-        n_rounds=cfg.qos_refine_rounds,
-        kcand=cfg.qos_refine_kcand,
-        max_moves_per_round=cfg.qos_refine_max_moves_per_round,
+        n_rounds=cfg.qos_refine.rounds,
+        kcand=cfg.qos_refine.kcand,
+        max_moves_per_round=cfg.qos_refine.max_moves_per_round,
     )
     ref_summary = summarize(users, cfg, clusters_ref, evals_ref)
-    if cfg.verbose:
+    if cfg.run.verbose:
         print("\nQoS refinement stats:", ref_stats)
         print_summary("Main algorithm + enterprise angle refinement", ref_summary, cfg)
-    if cfg.enable_plots:
+    if cfg.run.enable_plots:
         plot_clusters_overlay(
             users_xy_m=users.xy_m,
             qos_w=users.qos_w,
@@ -108,7 +108,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     K_ref = len(clusters)
     baseline_without_qos = run_weighted_kmeans_baseline(users, cfg, K_ref=K_ref, use_qos_weight=False)
     baseline_with_qos = run_weighted_kmeans_baseline(users, cfg, K_ref=K_ref, use_qos_weight=True)
-    if cfg.verbose:
+    if cfg.run.verbose:
         print_summary(f"Baseline without QOS {baseline_without_qos['name']} (fixed K={K_ref})",
                       baseline_without_qos["fixedK"]["summary"], cfg)
         rep_stats = baseline_without_qos["repair_stats"]
@@ -123,7 +123,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             f"\nRepair stats: K_before={rep_stats['K_before']}, K_after={rep_stats['K_after']}, splits={rep_stats['n_splits']}")
         print_summary(f"Baseline with QOS {baseline_with_qos['name']} (after repair)",
                       baseline_with_qos["repaired"]["summary"], cfg)
-    if cfg.enable_plots:
+    if cfg.run.enable_plots:
         # demand baseline plots
         plot_clusters_overlay(
             users_xy_m=users.xy_m,
@@ -170,18 +170,18 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     # Return record for sweeps
     # ---------------------------
     return {
-        "seed": cfg.seed,
+        "seed": cfg.run.seed,
         "region_mode": cfg.region_mode,
-        "n_users": cfg.n_users,
-        "use_hotspots": cfg.use_hotspots,
-        "n_hotspots": cfg.n_hotspots,
-        "noise_frac": cfg.noise_frac,
-        "sigma_min": cfg.hotspot_sigma_m_min,
-        "sigma_max": cfg.hotspot_sigma_m_max,
-        "rho_safe": cfg.rho_safe,
-        "eirp_dbw": cfg.eirp_dbw,
-        "bandwidth_hz": cfg.bandwidth_hz,
-        "radius_modes_km": cfg.radius_modes_km,
+        "n_users": cfg.run.n_users,
+        "use_hotspots": cfg.usergen.enabled,
+        "n_hotspots": cfg.usergen.n_hotspots,
+        "noise_frac": cfg.usergen.noise_frac,
+        "sigma_min": cfg.usergen.hotspot_sigma_m_min,
+        "sigma_max": cfg.usergen.hotspot_sigma_m_max,
+        "rho_safe": cfg.ent.rho_safe,
+        "eirp_dbw": cfg.phy.eirp_dbw,
+        "bandwidth_hz": cfg.phy.bandwidth_hz,
+        "radius_modes_km": cfg.beam.radius_modes_km,
         "main": main_summary,
         "main_ref": ref_summary,
         "wk_demand_fixed": baseline_without_qos["fixedK"]["summary"],

@@ -99,7 +99,7 @@ def refine_enterprise_by_angle(
     if K == 0:
         return clusters, evals, {"moves_accepted": 0, "moves_tried": 0, "rounds": 0}
 
-    rho = cfg.rho_safe
+    rho = cfg.ent.rho_safe
     stats = {"moves_accepted": 0, "moves_tried": 0, "rounds": int(n_rounds)}
 
     # Map user -> current cluster index for fast lookup
@@ -142,7 +142,7 @@ def refine_enterprise_by_angle(
             break
 
         # Shuffle to avoid bias
-        rng = np.random.default_rng(cfg.seed + 12345 + rnd)
+        rng = np.random.default_rng(cfg.run.seed + 12345 + rnd)
         rng.shuffle(at_risk_users)
 
         moves_this_round = 0

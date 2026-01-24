@@ -142,7 +142,7 @@ def run_weighted_kmeans_baseline(users: Users, cfg: ScenarioConfig, K_ref: int, 
         K=K_ref,
         sample_w=sample_w,
         n_iter=50,
-        seed=cfg.seed + 999,
+        seed=cfg.run.seed + 999,
     )
     clusters = labels_to_clusters(labels, K_ref)
 

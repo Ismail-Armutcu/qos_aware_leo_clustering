@@ -11,8 +11,7 @@ def repair_clusters_split_until_feasible(
     cfg,
     clusters: list[np.ndarray],
     max_total_clusters: int = 20000,
-    max_splits_total: int = 200000,
-    verbose: bool = False,
+    max_splits_total: int = 200000
 ) -> tuple[list[np.ndarray], list[dict], dict]:
     """
     STRICT repair:
@@ -81,11 +80,11 @@ def repair_clusters_split_until_feasible(
 
         # If size==2 and infeasible, splitting will produce singletons, so test if those would be feasible.
         # We can still split, but we want deterministic behavior and clear failure if singletons infeasible.
-        seed = cfg.seed + 10_000 + n_splits
+        seed = cfg.run.seed + 10_000 + n_splits
         S1, S2 = split_farthest(users.xy_m, S, seed=seed)
         n_splits += 1
 
-        if verbose:
+        if cfg.run.verbose:
             print(f"[repair] split size={S.size} reason={reason} -> {S1.size}+{S2.size}")
 
         queue.append(S1)

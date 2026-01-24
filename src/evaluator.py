@@ -48,7 +48,7 @@ def evaluate_cluster(
     # Geometric radius requirement
     dist_m = np.linalg.norm(xy - c_xy[None, :], axis=1)
     req_m = float(dist_m.max())
-    R_m = choose_radius_mode_m(req_m, cfg.radius_modes_km)
+    R_m = choose_radius_mode_m(req_m, cfg.beam.radius_modes_km)
     if R_m is None:
         return {"feasible": False, "reason": "geom", "center_xy": c_xy, "R_m": None, "req_m": req_m}
 
@@ -75,17 +75,17 @@ def evaluate_cluster(
     theta_3db = float(np.arctan(R_m / (d_center + 1e-9)))
 
     # PHY: FSPL + gain + SNR + Shannon rate
-    fspl = fspl_db(users.range_m[S], cfg.carrier_freq_hz)
+    fspl = fspl_db(users.range_m[S], cfg.phy.carrier_freq_hz)
     g_db = gain_db_gaussian(theta, theta_3db)
     snr = snr_lin(
-        cfg.eirp_dbw,
+        cfg.phy.eirp_dbw,
         g_db,
         fspl,
-        cfg.loss_misc_db,
-        cfg.noise_psd_dbw_hz,
-        cfg.bandwidth_hz,
+        cfg.phy.loss_misc_db,
+        cfg.phy.noise_psd_dbw_hz,
+        cfg.phy.bandwidth_hz,
     )
-    rate_mbps = shannon_rate_mbps(snr, cfg.bandwidth_hz, cfg.eta)
+    rate_mbps = shannon_rate_mbps(snr, cfg.phy.bandwidth_hz, cfg.phy.eta)
 
     # Capacity via time-share utilization
     d = users.demand_mbps[S]
@@ -95,7 +95,7 @@ def evaluate_cluster(
     cap_ok = U <= 1.0 + 1e-9
 
     # Enterprise edge-risk (soft penalty)
-    rho = cfg.rho_safe
+    rho = cfg.ent.rho_safe
     z = dist_m / (R_m + 1e-9)
     ent = (wq == 4)
     risk = float(np.sum(np.maximum(0.0, z[ent] - rho) ** 2))

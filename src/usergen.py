@@ -1,18 +1,22 @@
 # src/usergen.py
 from __future__ import annotations
+
 import numpy as np
 
-from config import ScenarioConfig
+from config import ScenarioConfig, BBox
 from src.coords import ll_to_local_xy_m, llh_to_ecef
 from src.models import User, Users
 
 
+# -----------------------------
+# Helpers: local tangent inverse
+# -----------------------------
 def local_xy_to_ll_deg(xy_m: np.ndarray, lat0_deg: float, lon0_deg: float) -> tuple[np.ndarray, np.ndarray]:
     """
     Inverse of ll_to_local_xy_m using the same local tangent approximation.
     x: East (m), y: North (m)
     """
-    R = 6371000.0
+    R = 6_371_000.0
     lat0 = np.deg2rad(lat0_deg)
 
     x = xy_m[:, 0]
@@ -27,34 +31,60 @@ def local_xy_to_ll_deg(xy_m: np.ndarray, lat0_deg: float, lon0_deg: float) -> tu
     return np.rad2deg(lat), np.rad2deg(lon)
 
 
-def _sample_uniform_latlon_in_bbox(rng, bbox, n: int) -> tuple[np.ndarray, np.ndarray]:
+def _sample_uniform_latlon_in_bbox(rng: np.random.Generator, bbox: BBox, n: int) -> tuple[np.ndarray, np.ndarray]:
     lat = rng.uniform(bbox.lat_min, bbox.lat_max, size=n)
     lon = rng.uniform(bbox.lon_min, bbox.lon_max, size=n)
     return lat, lon
 
 
-def _sample_hotspot_centers_xy(rng, cfg, n_hotspots: int) -> np.ndarray:
+def _sample_hotspot_centers_xy(
+    rng: np.random.Generator,
+    bbox: BBox,
+    lat0_deg: float,
+    lon0_deg: float,
+    n_hotspots: int,
+) -> np.ndarray:
     """
-    Generate hotspot centers uniformly inside bbox, in local XY coordinates.
+    Generate hotspot centers uniformly inside bbox, returned in local XY meters.
     """
-    latc, lonc = _sample_uniform_latlon_in_bbox(rng, cfg.bbox, n_hotspots)
-    centers_xy = ll_to_local_xy_m(latc, lonc, cfg.lat0_deg, cfg.lon0_deg)
-    return centers_xy
+    latc, lonc = _sample_uniform_latlon_in_bbox(rng, bbox, n_hotspots)
+    return ll_to_local_xy_m(latc, lonc, lat0_deg, lon0_deg)
 
 
-def generate_users(cfg) -> list[User]:
-    rng = np.random.default_rng(cfg.seed)
-    N = cfg.n_users
+def _clip01(x: float) -> float:
+    return float(min(max(x, 0.0), 1.0))
 
-    # --- Demand and QoS assignment (same as before) ---
-    mu = np.log(max(cfg.demand_logn_mean, 1e-6))
-    demand = rng.lognormal(mean=mu, sigma=cfg.demand_logn_sigma, size=N)
-    qos_cls = rng.choice([1, 2, 4], size=N, p=cfg.qos_probs)
 
-    # --- Choose generation mode ---
-    if not getattr(cfg, "use_hotspots", False):
-        # Original uniform generator
-        lat, lon = _sample_uniform_latlon_in_bbox(rng, cfg.bbox, N)
+# -----------------------------
+# Main: user generation
+# -----------------------------
+def generate_users(cfg: ScenarioConfig) -> list[User]:
+    """
+    Generates users according to cfg.usergen:
+      - If cfg.usergen.enabled is False -> uniform in bbox
+      - Else -> Gaussian hotspots + uniform noise in bbox
+
+    Also assigns demand and QoS according to cfg.traffic.
+    """
+    rng = np.random.default_rng(cfg.run.seed)
+    N = int(cfg.run.n_users)
+    bbox = cfg.bbox
+
+    # --- Demand and QoS assignment ---
+    # (Note: lognormal in numpy uses underlying normal mean/sigma. Keep your existing semantics.)
+    mu = float(cfg.traffic.demand_logn_mean)
+    sigma = float(cfg.traffic.demand_logn_sigma)
+    demand = rng.lognormal(mean=mu, sigma=sigma, size=N).astype(float)
+
+    qos_probs = np.asarray(cfg.traffic.qos_probs, dtype=float)
+    qos_probs = qos_probs / (qos_probs.sum() + 1e-12)
+    qos_cls = rng.choice(np.array([1, 2, 4], dtype=int), size=N, p=qos_probs)
+
+    # ---------------------------
+    # Case A: uniform generation
+    # ---------------------------
+    if not cfg.usergen.enabled:
+        lat, lon = _sample_uniform_latlon_in_bbox(rng, bbox, N)
         xy = ll_to_local_xy_m(lat, lon, cfg.lat0_deg, cfg.lon0_deg)
         ecef = llh_to_ecef(lat, lon, 0.0)
 
@@ -73,67 +103,65 @@ def generate_users(cfg) -> list[User]:
             )
         return users
 
-    # --- Hotspots + noise generator ---
-    noise_frac = float(getattr(cfg, "noise_frac", 0.15))
-    noise_frac = min(max(noise_frac, 0.0), 1.0)
-
+    # --------------------------------------
+    # Case B: hotspots + uniform noise in bbox
+    # --------------------------------------
+    noise_frac = _clip01(float(cfg.usergen.noise_frac))
     n_noise = int(round(N * noise_frac))
     n_hot = N - n_noise
 
-    n_hotspots = int(getattr(cfg, "n_hotspots", 6))
-    n_hotspots = max(n_hotspots, 1)
+    n_hotspots = max(int(cfg.usergen.n_hotspots), 1)
 
-    # Hotspot centers in XY
-    if getattr(cfg, "hotspot_centers_random", True):
-        centers_xy = _sample_hotspot_centers_xy(rng, cfg, n_hotspots)
+    # Hotspot centers
+    if cfg.usergen.hotspot_centers_random:
+        centers_xy = _sample_hotspot_centers_xy(
+            rng=rng,
+            bbox=bbox,
+            lat0_deg=cfg.lat0_deg,
+            lon0_deg=cfg.lon0_deg,
+            n_hotspots=n_hotspots,
+        )
     else:
-        # Optional fixed centers in lat/lon (if you define cfg.hotspot_centers_latlon)
-        centers_latlon = getattr(cfg, "hotspot_centers_latlon", None)
+        centers_latlon = getattr(cfg.usergen, "hotspot_centers_latlon", None)
         if not centers_latlon:
-            raise ValueError("hotspot_centers_random=False but cfg.hotspot_centers_latlon not provided.")
+            raise ValueError("usergen.hotspot_centers_random=False but usergen.hotspot_centers_latlon not provided.")
         latc = np.array([p[0] for p in centers_latlon], dtype=float)
         lonc = np.array([p[1] for p in centers_latlon], dtype=float)
         centers_xy = ll_to_local_xy_m(latc, lonc, cfg.lat0_deg, cfg.lon0_deg)
-        n_hotspots = centers_xy.shape[0]
+        n_hotspots = int(centers_xy.shape[0])
 
-    # Hotspot sigmas (per-hotspot)
-    smin = float(getattr(cfg, "hotspot_sigma_m_min", 3000.0))
-    smax = float(getattr(cfg, "hotspot_sigma_m_max", 12000.0))
+    # Per-hotspot sigma
+    smin = float(cfg.usergen.hotspot_sigma_m_min)
+    smax = float(cfg.usergen.hotspot_sigma_m_max)
     if smax < smin:
         smin, smax = smax, smin
-    sigmas = rng.uniform(smin, smax, size=n_hotspots)
+    sigmas = rng.uniform(smin, smax, size=n_hotspots).astype(float)
 
-    # Hotspot weights (random but deterministic)
-    # Dirichlet gives a nice variability of hotspot sizes.
-    alpha = np.ones(n_hotspots)
-    w_hotspots = rng.dirichlet(alpha)
+    # Hotspot mixture weights
+    w_hotspots = rng.dirichlet(np.ones(n_hotspots, dtype=float))
 
     # Assign each hotspot-generated user to a hotspot id
     hotspot_ids = rng.choice(np.arange(n_hotspots), size=n_hot, p=w_hotspots)
 
-    # Sample hotspot points in XY with bbox rejection
+    # Sample hotspot points with rejection to stay in bbox (via lat/lon check)
     xy_hot = np.zeros((n_hot, 2), dtype=float)
     filled = 0
-    max_tries = 50
+    max_tries = 60  # keep bounded
 
-    # Precompute bbox bounds in XY approximately by converting corners
-    # (we use rejection in lat/lon space later; this is just to avoid crazy loops)
     for _ in range(max_tries):
         if filled >= n_hot:
             break
-        remaining = n_hot - filled
 
+        remaining = n_hot - filled
         hids = hotspot_ids[filled:filled + remaining]
-        # Sample Gaussian around each selected hotspot
-        # Use isotropic sigma per hotspot
+
         eps = rng.standard_normal((remaining, 2))
         xy_prop = centers_xy[hids] + eps * sigmas[hids][:, None]
 
-        # Convert proposal to lat/lon and accept only those inside bbox
         lat_prop, lon_prop = local_xy_to_ll_deg(xy_prop, cfg.lat0_deg, cfg.lon0_deg)
         ok = (
-            (lat_prop >= cfg.bbox.lat_min) & (lat_prop <= cfg.bbox.lat_max) &
-            (lon_prop >= cfg.bbox.lon_min) & (lon_prop <= cfg.bbox.lon_max)
+            (lat_prop >= bbox.lat_min) & (lat_prop <= bbox.lat_max) &
+            (lon_prop >= bbox.lon_min) & (lon_prop <= bbox.lon_max)
         )
 
         accept = np.where(ok)[0]
@@ -144,25 +172,25 @@ def generate_users(cfg) -> list[User]:
         xy_hot[filled:filled + take.size] = xy_prop[take]
         filled += take.size
 
+    # Fallback: fill remaining with uniform noise
     if filled < n_hot:
-        # fallback: fill remaining with uniform noise in bbox
-        lat_u, lon_u = _sample_uniform_latlon_in_bbox(rng, cfg.bbox, n_hot - filled)
+        lat_u, lon_u = _sample_uniform_latlon_in_bbox(rng, bbox, n_hot - filled)
         xy_u = ll_to_local_xy_m(lat_u, lon_u, cfg.lat0_deg, cfg.lon0_deg)
         xy_hot[filled:] = xy_u
 
-    # Sample noise users uniformly in bbox
+    # Noise users
     if n_noise > 0:
-        lat_n, lon_n = _sample_uniform_latlon_in_bbox(rng, cfg.bbox, n_noise)
+        lat_n, lon_n = _sample_uniform_latlon_in_bbox(rng, bbox, n_noise)
         xy_noise = ll_to_local_xy_m(lat_n, lon_n, cfg.lat0_deg, cfg.lon0_deg)
         xy_all = np.vstack([xy_hot, xy_noise])
     else:
         xy_all = xy_hot
 
-    # Convert to lat/lon, ECEF
+    # Convert to lat/lon + ECEF
     lat_all, lon_all = local_xy_to_ll_deg(xy_all, cfg.lat0_deg, cfg.lon0_deg)
     ecef_all = llh_to_ecef(lat_all, lon_all, 0.0)
 
-    # Build users
+    # Build User objects
     users: list[User] = []
     for i in range(N):
         users.append(
@@ -179,7 +207,11 @@ def generate_users(cfg) -> list[User]:
 
     return users
 
-def build_users_container(user_list, cfg: ScenarioConfig) -> Users:
+
+# -----------------------------
+# Packing: Users container
+# -----------------------------
+def build_users_container(user_list: list[User], cfg: ScenarioConfig) -> Users:
     """
     Pack list[User] into vectorized Users container + precompute sat->user geometry.
     """
@@ -191,7 +223,7 @@ def build_users_container(user_list, cfg: ScenarioConfig) -> Users:
     qos = np.array([u.qos_w for u in user_list], dtype=int)
 
     # Satellite ECEF: above bbox center at configured altitude
-    sat_ecef = llh_to_ecef(cfg.lat0_deg, cfg.lon0_deg, cfg.sat_altitude_m).astype(float)
+    sat_ecef = llh_to_ecef(cfg.lat0_deg, cfg.lon0_deg, float(cfg.phy.sat_altitude_m)).astype(float)
 
     # Precompute sat->user geometry
     vec = ecef - sat_ecef[None, :]

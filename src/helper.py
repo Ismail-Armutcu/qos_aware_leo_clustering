@@ -39,7 +39,7 @@ def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
         if np.any(ent_local):
             z_ent = z[ent_local]
             ent_z_all.append(z_ent)
-            ent_exposed += int((z_ent > cfg.rho_safe).sum())
+            ent_exposed += int((z_ent > cfg.ent.rho_safe).sum())
 
     if ent_total > 0:
         ent_edge_pct = 100.0 * ent_exposed / ent_total
@@ -82,7 +82,7 @@ def print_summary(title: str, s: dict, cfg: ScenarioConfig):
     # Enterprise stats
     print(
         f"Enterprise edge exposure: {s['ent_edge_pct']:.2f}% "
-        f"({s['ent_exposed']}/{s['ent_total']})  (z > rho={cfg.rho_safe})"
+        f"({s['ent_exposed']}/{s['ent_total']})  (z > rho={cfg.ent.rho_safe})"
     )
     print(f"Enterprise z: mean={s['ent_z_mean']:.3f}, p90={s['ent_z_p90']:.3f}, max={s['ent_z_max']:.3f}")
 
@@ -97,20 +97,24 @@ def flatten_summary(prefix: str, s: dict[str, Any]) -> dict[str, Any]:
 
 def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     # scenario columns
-    row = {
+    row: dict[str, Any] = {
         "seed": rec["seed"],
         "region_mode": rec["region_mode"],
         "n_users": rec["n_users"],
+
+        # keep the CSV header stable even if internal name is now usergen.enabled
         "use_hotspots": rec["use_hotspots"],
         "n_hotspots": rec["n_hotspots"],
         "noise_frac": rec["noise_frac"],
         "sigma_min": rec["sigma_min"],
         "sigma_max": rec["sigma_max"],
+
         "rho_safe": rec["rho_safe"],
         "eirp_dbw": rec["eirp_dbw"],
         "bandwidth_hz": rec["bandwidth_hz"],
         "radius_modes_km": str(rec["radius_modes_km"]),
     }
+
     # algorithm KPIs
     row |= flatten_summary("main", rec["main"])
     row |= flatten_summary("main_ref", rec["main_ref"])
@@ -118,6 +122,7 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     row |= flatten_summary("wk_demand_rep", rec["wk_demand_rep"])
     row |= flatten_summary("wk_qos_fixed", rec["wk_qos_fixed"])
     row |= flatten_summary("wk_qos_rep", rec["wk_qos_rep"])
+
     return row
 
 def write_csv(path: str, rows: list[dict[str, Any]]):

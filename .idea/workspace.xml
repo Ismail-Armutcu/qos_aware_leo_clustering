@@ -16,7 +16,7 @@
     </persistenceIdMap>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="23" />
+    <option name="cachedIndexableFilesCount" value="27" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="FileTemplateManagerImpl">
@@ -122,6 +122,7 @@
       <workItem from="1768757635406" duration="8462000" />
       <workItem from="1769108692778" duration="87000" />
       <workItem from="1769108814213" duration="6823000" />
+      <workItem from="1769279117581" duration="359000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -147,7 +148,23 @@
       <option name="project" value="LOCAL" />
       <updated>1769116474902</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Refactor configuration system to introduce grouped blocks for modularity. Update all modules to use the new config structure with hierarchical access patterns.">
+      <option name="closed" value="true" />
+      <created>1769279405968</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1769279405968</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Refactor `pipeline.py` to add load-balance refinement logic and enhance configuration printing. Update related modules for expanded config capabilities and hierarchical access structure.">
+      <option name="closed" value="true" />
+      <created>1769279476277</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1769279476277</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

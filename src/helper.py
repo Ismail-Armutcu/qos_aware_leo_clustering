@@ -249,6 +249,19 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "eirp_dbw": rec["eirp_dbw"],
         "bandwidth_hz": rec["bandwidth_hz"],
         "radius_modes_km": str(rec["radius_modes_km"]),
+
+        "time_usergen_s": rec["time_usergen_s"],
+        "time_split_s": rec["time_split_s"],
+        "time_ent_ref_s": rec["time_ent_ref_s"],
+        "time_lb_ref_s": rec["time_lb_ref_s"],
+        "eval_calls": rec["eval_calls"],
+        "n_splits": rec["n_splits"],
+        "ent_moves_tried": rec["ent_moves_tried"],
+        "ent_moves_accepted": rec["ent_moves_accepted"],
+        "lb_moves_tried": rec["lb_moves_tried"],
+        "lb_moves_accepted": rec["lb_moves_accepted"],
+        "time_baseline_without_qos_s": rec["time_baseline_without_qos_s"],
+        "time_baseline_with_qos_s": rec["time_baseline_with_qos_s"]
     }
 
     # algorithm KPIs

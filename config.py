@@ -49,7 +49,7 @@ class EnterpriseConfig:
 @dataclass(frozen=True)
 class TrafficConfig:
     # Demand distribution + QoS class ratios
-    demand_mbps_median: float = 5.0
+    demand_mbps_median: float = 0.005
     demand_logn_sigma: float = 0.6
     qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)  # eco/std/ent
 
@@ -112,6 +112,7 @@ class RunConfig:
 
     enable_plots: bool = True
     verbose: bool = True
+    enable_fastbp_baselines: bool = False
 
 
 # -----------------------------

@@ -91,6 +91,7 @@ def main():
                 n_users=2500,
                 enable_plots=False,
                 verbose=False,
+                enable_fastbp_baselines=True
             ),
             usergen=replace(
                 base.usergen,
@@ -112,7 +113,7 @@ def main():
     # Your flatten_run_record should already output seed; but now seed lives in cfg.run.seed
     # Make sure your record uses cfg.run.seed (see note below).
     rows.sort(key=lambda r: r["seed"])
-    write_csv("sweep_phaseA_parallel.csv", rows)
+    write_csv("sweep_phaseA_low_demand.csv", rows)
     print(f"Wrote {len(rows)} runs to sweep_phaseA_parallel.csv")
 
     # -------------------------
@@ -133,6 +134,7 @@ def main():
                     n_users=n,
                     enable_plots=False,
                     verbose=False,
+                    enable_fastbp_baselines=True
                 ),
                 # keep the same user generator settings as base (or set explicitly if you want)
                 # usergen=replace(base.usergen, enabled=True, ...)

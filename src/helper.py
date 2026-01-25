@@ -261,7 +261,9 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "lb_moves_tried": rec["lb_moves_tried"],
         "lb_moves_accepted": rec["lb_moves_accepted"],
         "time_baseline_without_qos_s": rec["time_baseline_without_qos_s"],
-        "time_baseline_with_qos_s": rec["time_baseline_with_qos_s"]
+        "time_baseline_with_qos_s": rec["time_baseline_with_qos_s"],
+        "time_baseline_bkmeans_s": rec["time_baseline_bkmeans_s"],
+        "time_baseline_tgbp_s": rec["time_baseline_tgbp_s"],
     }
 
     # algorithm KPIs
@@ -272,7 +274,10 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     row |= flatten_summary("wk_demand_rep", rec["wk_demand_rep"])
     row |= flatten_summary("wk_qos_fixed", rec["wk_qos_fixed"])
     row |= flatten_summary("wk_qos_rep", rec["wk_qos_rep"])
-
+    row |= flatten_summary("bk_fixed", rec["bk_fixed"])
+    row |= flatten_summary("bk_rep", rec["bk_rep"])
+    row |= flatten_summary("tgbp_fixed", rec["tgbp_fixed"])
+    row |= flatten_summary("tgbp_rep", rec["tgbp_rep"])
     return row
 
 def write_csv(path: str, rows: list[dict[str, Any]]):

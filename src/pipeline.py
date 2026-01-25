@@ -5,6 +5,7 @@ import numpy as np
 
 from config import ScenarioConfig
 from src.baselines.weighted_kmeans import run_weighted_kmeans_baseline
+from src.baselines.fast_beam_placement import run_bkmeans_baseline, run_tgbp_baseline
 from src.evaluator import evaluate_cluster
 from src.helper import summarize, print_summary, print_config
 from src.plot import plot_clusters_overlay
@@ -235,6 +236,50 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             draw_centers=True,
             max_circles=250,
         )
+
+    # ---------------------------------------------
+    # 4) Baselines from "Fast Beam Placement" paper
+    # ---------------------------------------------
+    EMPTY_SUMMARY = {
+        "K": float("nan"),
+        "feasible_rate": float("nan"),
+        "U_mean": float("nan"),
+        "U_max": float("nan"),
+        "U_min": float("nan"),
+        "risk_sum": float("nan"),
+        "ent_total": float("nan"),
+        "ent_exposed": float("nan"),
+        "ent_edge_pct": float("nan"),
+        "ent_z_mean": float("nan"),
+        "ent_z_p90": float("nan"),
+        "ent_z_max": float("nan"),
+    }
+
+    if cfg.run.enable_fastbp_baselines:
+        prof.tic("baseline_bkmeans")
+        baseline_bkmeans = run_bkmeans_baseline(users, cfg, K_hint=K_ref, mu_restarts=10, max_iter=40)
+        prof.toc("baseline_bkmeans")
+
+        prof.tic("baseline_tgbp")
+        baseline_tgbp = run_tgbp_baseline(users, cfg, do_phase2=True, max_rounds=10)
+        prof.toc("baseline_tgbp")
+
+        if cfg.run.verbose:
+            print_summary(f"Baseline BKMeans (fixed K={baseline_bkmeans['fixedK']['summary']['K']})",
+                          baseline_bkmeans["fixedK"]["summary"], cfg)
+            print_summary("Baseline BKMeans (after repair)",
+                          baseline_bkmeans["repaired"]["summary"], cfg)
+
+            print_summary(f"Baseline TGBP (fixed K={baseline_tgbp['fixedK']['summary']['K']})",
+                          baseline_tgbp["fixedK"]["summary"], cfg)
+            print_summary("Baseline TGBP (after repair)",
+                          baseline_tgbp["repaired"]["summary"], cfg)
+    else:
+        baseline_bkmeans = {"fixedK": {"summary": EMPTY_SUMMARY}, "repaired": {"summary": EMPTY_SUMMARY}}
+        baseline_tgbp = {"fixedK": {"summary": EMPTY_SUMMARY}, "repaired": {"summary": EMPTY_SUMMARY}}
+        # keep profiler keys stable
+        prof.t["baseline_bkmeans"] = 0.0
+        prof.t["baseline_tgbp"] = 0.0
     # ---------------------------
     # Return record for sweeps
     # ---------------------------
@@ -269,5 +314,12 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         "lb_moves_tried": prof.c.get("lb_moves_tried", 0),
         "lb_moves_accepted": prof.c.get("lb_moves_accepted", 0),
         "time_baseline_without_qos_s": prof.t.get("baseline_without_qos", 0.0),
-        "time_baseline_with_qos_s": prof.t.get("baseline_with_qos", 0.0)
+        "time_baseline_with_qos_s": prof.t.get("baseline_with_qos", 0.0),
+        "bk_fixed": baseline_bkmeans["fixedK"]["summary"],
+        "bk_rep": baseline_bkmeans["repaired"]["summary"],
+        "tgbp_fixed": baseline_tgbp["fixedK"]["summary"],
+        "tgbp_rep": baseline_tgbp["repaired"]["summary"],
+
+        "time_baseline_bkmeans_s": prof.t.get("baseline_bkmeans", 0.0),
+        "time_baseline_tgbp_s": prof.t.get("baseline_tgbp", 0.0),
     }

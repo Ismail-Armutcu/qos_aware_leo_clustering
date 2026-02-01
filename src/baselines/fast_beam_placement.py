@@ -283,8 +283,8 @@ def run_tgbp_baseline(
         phase1_groups=len(groups),
         phase2_rounds=rounds_used,
         phase2_moves=moves_used,
-        degrees_mean=float(np.mean(degrees)),
-        degrees_p95=float(np.percentile(degrees, 95)),
+        degrees_mean=float(np.mean(degrees)) if degrees.size else 0.0,
+        degrees_p95=float(np.percentile(degrees, 95)) if degrees.size else 0.0,
         degrees_max=int(np.max(degrees)) if degrees.size else 0,
     )
 
@@ -336,6 +336,8 @@ def _kmeans_fit_predict(
 
     # Fallback Lloyd (chunked assignment)
     rng = np.random.default_rng(seed)
+
+    # k-means++ init
     centers = np.empty((K, 2), dtype=float)
     centers[0] = xy[int(rng.integers(0, xy.shape[0]))]
     d2_min = np.sum((xy - centers[0]) ** 2, axis=1)
@@ -346,9 +348,12 @@ def _kmeans_fit_predict(
         d2_new = np.sum((xy - centers[k]) ** 2, axis=1)
         d2_min = np.minimum(d2_min, d2_new)
 
-    labels = np.zeros(xy.shape[0], dtype=int)
+    labels = np.full(xy.shape[0], -1, dtype=int)
+
     for _ in range(max_iter):
         new_labels = np.empty_like(labels)
+
+        # assign in chunks
         for i0 in range(0, xy.shape[0], 4096):
             Xc = xy[i0:i0 + 4096]
             d2 = np.sum((Xc[:, None, :] - centers[None, :, :]) ** 2, axis=2)
@@ -358,11 +363,13 @@ def _kmeans_fit_predict(
             break
         labels = new_labels
 
+        # update
         for k in range(K):
             idx = np.where(labels == k)[0]
             if idx.size > 0:
                 centers[k] = xy[idx].mean(axis=0)
             else:
+                # re-seed empty cluster
                 centers[k] = xy[int(rng.integers(0, xy.shape[0]))]
 
     return labels, centers
@@ -401,7 +408,7 @@ def run_bkmeans_baseline(
     dist_thresh = 2.0 * rmax
 
     N = xy.shape[0]
-    rng = np.random.default_rng(cfg.run.seed + seed_offset)
+    rng = np.random.default_rng(int(cfg.run.seed) + int(seed_offset))
 
     K_hi = 1 if K_hint is None else int(max(1, min(N, K_hint)))
 
@@ -411,11 +418,19 @@ def run_bkmeans_baseline(
 
     def feasible_for_K(K: int) -> Tuple[bool, Optional[np.ndarray], Optional[np.ndarray]]:
         nonlocal kmeans_calls, clique_checks_total, restarts_used_total
-        for _rr in range(mu_restarts):
+        for _rr in range(int(mu_restarts)):
             seed = int(rng.integers(0, 2**31 - 1))
-            labels, centers = _kmeans_fit_predict(xy, K, seed=seed, max_iter=max_iter)
+            labels, centers = _kmeans_fit_predict(xy, K, seed=seed, max_iter=int(max_iter))
             kmeans_calls += 1
+
             clusters = _labels_to_clusters(labels, K)
+
+            # IMPORTANT: if some clusters are empty, treat as NOT feasible for this K
+            # (otherwise binary-search can “cheat” by collapsing K effectively)
+            if len(clusters) < K:
+                restarts_used_total += 1
+                continue
+
             ok, checks = _all_clusters_clique(xy, clusters, dist_thresh)
             clique_checks_total += checks
             restarts_used_total += 1
@@ -424,11 +439,11 @@ def run_bkmeans_baseline(
         return False, None, None
 
     ok, labels_hi, centers_hi = feasible_for_K(K_hi)
-    while not ok and K_hi < N:
+    while (not ok) and (K_hi < N):
         K_hi = min(N, max(K_hi + 1, int(K_hi * 2)))
         ok, labels_hi, centers_hi = feasible_for_K(K_hi)
 
-    if not ok or labels_hi is None or centers_hi is None:
+    if (not ok) or (labels_hi is None) or (centers_hi is None):
         raise RuntimeError("BKMeans: failed to find a feasible K up to N.")
 
     K_lo = 0
@@ -437,8 +452,8 @@ def run_bkmeans_baseline(
 
     while K_lo + 1 < K_hi:
         K_mid = (K_lo + K_hi) // 2
-        ok, labels_mid, centers_mid = feasible_for_K(K_mid)
-        if ok and labels_mid is not None and centers_mid is not None:
+        ok_mid, labels_mid, centers_mid = feasible_for_K(K_mid)
+        if ok_mid and (labels_mid is not None) and (centers_mid is not None):
             K_hi = K_mid
             best_labels = labels_mid
             best_centers = centers_mid
@@ -448,7 +463,7 @@ def run_bkmeans_baseline(
     clusters_fixed = _labels_to_clusters(best_labels, K_hi)
 
     # Evaluate fixed clusters using KMeans centers as beam centers (override)
-    evals_fixed = []
+    evals_fixed: list[dict] = []
     for S in clusters_fixed:
         k = int(best_labels[S[0]])
         center_xy = best_centers[k]

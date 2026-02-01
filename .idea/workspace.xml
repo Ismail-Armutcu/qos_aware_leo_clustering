@@ -4,13 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor `refine_load_balance.py` to integrate enhanced load-balancing refinement logic with performance optimizations and add `profiling.py` for timing and count tracking utilities.">
-      <change afterPath="$PROJECT_DIR$/src/baselines/fast_beam_placement.py" afterDir="false" />
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/helper.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/helper.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/post_analysis/sweep_phaseB_scaling.csv" beforeDir="false" afterPath="$PROJECT_DIR$/src/post_analysis/sweep_phaseB_scaling.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/sweep_phaseB_scaling.csv" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -112,7 +110,7 @@
       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
       <option name="RUN_TOOL" value="" />
       <option name="SCRIPT_NAME" value="src/post_analysis/plot_sweep_summary.py" />
-      <option name="PARAMETERS" value="--csv src/post_analysis/sweep_phaseA_low_demand.csv --out src/post_analysis/phaseA_lowDemand" />
+      <option name="PARAMETERS" value="--csv src/post_analysis/sweep_phaseB_scaling.csv --out src/post_analysis/phaseB_lowuser" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
       <option name="MODULE_MODE" value="false" />
@@ -169,7 +167,7 @@
       <workItem from="1769108692778" duration="87000" />
       <workItem from="1769108814213" duration="6823000" />
       <workItem from="1769279117581" duration="592000" />
-      <workItem from="1769338916209" duration="9113000" />
+      <workItem from="1769338916209" duration="10827000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -227,7 +225,23 @@
       <option name="project" value="LOCAL" />
       <updated>1769279605615</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Add sweep phase A CSV files for low demand and parallel scenarios in `post_analysis` directory.">
+      <option name="closed" value="true" />
+      <created>1769357433829</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1769357433829</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling.">
+      <option name="closed" value="true" />
+      <created>1769357956339</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1769357956339</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -252,13 +266,15 @@
     <MESSAGE value="Refactor `pipeline.py` to add load-balance refinement logic and enhance configuration printing. Update related modules for expanded config capabilities and hierarchical access structure." />
     <MESSAGE value="Refactor `pipeline.py` to incorporate profiling via `Profiler` and optimize `split_to_feasible` with a queue-based approach. Enhance `main.py` with progress tracking and expand user scaling list. Update helper and config for detailed metric outputs." />
     <MESSAGE value="Refactor `refine_load_balance.py` to integrate enhanced load-balancing refinement logic with performance optimizations and add `profiling.py` for timing and count tracking utilities." />
-    <option name="LAST_COMMIT_MESSAGE" value="Refactor `refine_load_balance.py` to integrate enhanced load-balancing refinement logic with performance optimizations and add `profiling.py` for timing and count tracking utilities." />
+    <MESSAGE value="Add sweep phase A CSV files for low demand and parallel scenarios in `post_analysis` directory." />
+    <MESSAGE value="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling." />
+    <option name="LAST_COMMIT_MESSAGE" value="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$main.coverage" NAME="main Coverage Results" MODIFIED="1768758431251" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1769355567763" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769355677023" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1769357985464" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769358191913" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

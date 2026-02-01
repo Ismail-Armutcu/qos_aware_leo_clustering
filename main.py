@@ -1,10 +1,12 @@
 # main.py
 from __future__ import annotations
+import os
+# Fix sklearn KMeans MKL warning / leak on Windows
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 from config import ScenarioConfig
 from src.helper import flatten_run_record, write_csv
 from src.pipeline import run_scenario
 from src.sweep_plots import plot_phaseA, plot_phaseB, plot_all
-import os
 import multiprocessing as mp
 from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -62,6 +64,8 @@ def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) 
 
 
 def main():
+    plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
+    plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
     base = ScenarioConfig()
 
     # -------------------------

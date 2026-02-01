@@ -269,9 +269,6 @@ def plot_runtime_methods_vs_nusers(
 
     # ----- build "my total runtime" as sum of internal parts -----
     my_parts = [
-        "time_usergen_s",
-        "time_sat_select_s",
-        "time_assoc_s",
         "time_split_s",
         "time_ent_ref_s",
         "time_lb_ref_s",
@@ -287,6 +284,9 @@ def plot_runtime_methods_vs_nusers(
 
     # ----- baseline totals (already measured per run) -----
     baselines = {
+        #"time_split_s": "time_split_s",
+        #"time_ent_ref_s": "time_ent_ref_s",
+        #"time_lb_ref_s": "time_lb_ref_s",
         "WKMeans++ (demand) total": "time_baseline_without_qos_s",
         "WKMeans++ (demand*qos) total": "time_baseline_with_qos_s",
         "BKMeans total": "time_baseline_bkmeans_s",
@@ -332,8 +332,6 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     plot_lines_vs_nusers(
         dfB,
         series={
-            "main": "main_K",
-            "main+qos": "main_ref_K",
             "main+qos+lb": "main_ref_lb_K",
             "wk demand rep": "wk_demand_rep_K",
             "wk qos rep": "wk_qos_rep_K",
@@ -350,8 +348,6 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     plot_lines_vs_nusers(
         dfB,
         series={
-            "main": "main_ent_edge_pct",
-            "main+qos": "main_ref_ent_edge_pct",
             "main+qos+lb": "main_ref_lb_ent_edge_pct",
             "wk demand rep": "wk_demand_rep_ent_edge_pct",
             "wk qos rep": "wk_qos_rep_ent_edge_pct",
@@ -368,8 +364,6 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     plot_lines_vs_nusers(
         dfB,
         series={
-            "main": "main_U_mean",
-            "main+qos": "main_ref_U_mean",
             "main+qos+lb": "main_ref_lb_U_mean",
             "wk demand rep": "wk_demand_rep_U_mean",
             "wk qos rep": "wk_qos_rep_U_mean",
@@ -386,8 +380,6 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     plot_lines_vs_nusers(
         dfB,
         series={
-            "main": "main_U_max",
-            "main+qos": "main_ref_U_max",
             "main+qos+lb": "main_ref_lb_U_max",
             "wk demand rep": "wk_demand_rep_U_max",
             "wk qos rep": "wk_qos_rep_U_max",
@@ -404,8 +396,6 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     plot_lines_vs_nusers(
         dfB,
         series={
-            "main": "main_risk_sum",
-            "main+qos": "main_ref_risk_sum",
             "main+qos+lb": "main_ref_lb_risk_sum",
             "wk demand rep": "wk_demand_rep_risk_sum",
             "wk qos rep": "wk_qos_rep_risk_sum",

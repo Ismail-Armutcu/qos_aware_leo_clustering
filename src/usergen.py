@@ -161,5 +161,5 @@ def build_users_for_sat(users_raw: UsersRaw, user_ids: np.ndarray, sat_ecef_m: n
         qos_w=qos,
         sat_ecef_m=sat_ecef_m,
         range_m=range_m,
-        u_sat2user=u_sat2user,
+        u_sat2user=u_sat2user
     )

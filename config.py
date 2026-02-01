@@ -61,17 +61,17 @@ class QoSRefineConfig:
 @dataclass(frozen=True)
 class LoadBalanceRefineConfig:
     enabled: bool = True
-    rounds: int = 3
-    max_moves_per_round: int = 3000
-    k_receivers: int = 8
-    k_users_from_donor: int = 30
-    intersect_margin_m: float = 0.0
-    objective: str = "range"  # "range" or "var"
+    rounds: int = 2                 # 3 -> expensive in multi-sat
+    max_moves_per_round: int = 3000   # keep, but we will CAP it per-sat adaptively in code
+    k_receivers: int = 6         # 8 is ok, but costs more
+    k_users_from_donor: int = 20      # 30 is ok, but costs more
+    intersect_margin_m: float = 0.1
+    objective: str = "max"
     prefer_non_enterprise: bool = True
     risk_slack: float = 1e-9
     exposure_slack: int = 0
     allow_receiver_close_to_full: bool = False
-    receiver_u_max: float = 0.95
+    receiver_u_max: float = 0.98      # 0.95 often causes tons of failed tries
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ class RunConfig:
 class MultiSatConfig:
     tle_path: str = "starlink.tle"
     elev_mask_deg: float = 25.0
-    n_active: int = 30
+    n_active: int = 10
 
     # Optional fixed snapshot time for reproducibility (ISO string)
     # Example: "2026-01-29T16:19:56Z"

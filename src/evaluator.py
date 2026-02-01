@@ -22,10 +22,7 @@ def evaluate_cluster(
     R_m_override: float | None = None,
 ):
     """
-    Evaluate one cluster with a single consistent naming convention:
-
-      - center_xy_m : (2,)
-      - center_ecef_m : (3,)
+    Evaluate one cluster.
 
     Optional overrides:
       - center_xy_override : force XY center (meters)
@@ -83,7 +80,7 @@ def evaluate_cluster(
 
     # boresight sat->center
     v_c = c_ecef - users.sat_ecef_m
-    d_center = float(np.linalg.norm(v_c))
+    d_center = float(np.linalg.norm(v_c)) + 1e-12
     u_c = unit(v_c)
 
     # off-axis angles
@@ -91,7 +88,7 @@ def evaluate_cluster(
     cosang = np.clip(u_i @ u_c, -1.0, 1.0)
     theta = np.arccos(cosang)
 
-    theta_3db = float(np.arctan(R_m / (d_center + 1e-9)))
+    theta_3db = float(np.arctan(R_m / d_center))
 
     # PHY
     fspl = fspl_db(users.range_m[S], cfg.phy.carrier_freq_hz)
@@ -122,19 +119,14 @@ def evaluate_cluster(
     return {
         "feasible": bool(cap_ok),
         "reason": None if cap_ok else "cap",
-
         "center_xy_m": c_xy,
         "center_ecef_m": c_ecef,
-
         "R_m": float(R_m),
         "req_m": req_m,
-
         "U": U,
         "risk": risk,
-
         "rate_mbps": rate_mbps,
         "z": z,
-
         # exposed for downstream speed (LB etc.)
         "u_c": u_c,
         "d_center": d_center,

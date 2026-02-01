@@ -4,11 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling.">
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/post_analysis/sweep_phaseB_scaling.csv" beforeDir="false" afterPath="$PROJECT_DIR$/src/post_analysis/sweep_phaseB_scaling.csv" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/sweep_phaseB_scaling.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/refine_load_balance.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/refine_load_balance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/sweep_phaseA.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseA.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/sweep_phaseB.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseB.csv" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -21,7 +24,7 @@
     </persistenceIdMap>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="30" />
+    <option name="cachedIndexableFilesCount" value="78" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="FileTemplateManagerImpl">
@@ -29,6 +32,17 @@
       <list>
         <option value="Python Script" />
       </list>
+    </option>
+  </component>
+  <component name="FlaskConsoleOptions" custom-start-script="import sys; print('Python %s on %s' % (sys.version, sys.platform)); sys.path.extend([WORKING_DIR_AND_PYTHON_PATHS])&#10;from flask.cli import ScriptInfo, NoAppException&#10;for module in [&quot;main.py&quot;, &quot;wsgi.py&quot;, &quot;app.py&quot;]:&#10;    try: locals().update(ScriptInfo(app_import_path=module, create_app=None).load_app().make_shell_context()); print(&quot;\nFlask App: %s&quot; % app.import_name); break&#10;    except NoAppException: pass">
+    <envs>
+      <env key="FLASK_APP" value="app" />
+    </envs>
+    <option name="myCustomStartScript" value="import sys; print('Python %s on %s' % (sys.version, sys.platform)); sys.path.extend([WORKING_DIR_AND_PYTHON_PATHS])&#10;from flask.cli import ScriptInfo, NoAppException&#10;for module in [&quot;main.py&quot;, &quot;wsgi.py&quot;, &quot;app.py&quot;]:&#10;    try: locals().update(ScriptInfo(app_import_path=module, create_app=None).load_app().make_shell_context()); print(&quot;\nFlask App: %s&quot; % app.import_name); break&#10;    except NoAppException: pass" />
+    <option name="myEnvs">
+      <map>
+        <entry key="FLASK_APP" value="app" />
+      </map>
     </option>
   </component>
   <component name="Git.Settings">
@@ -58,32 +72,32 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "Python.config.executor": "Run",
-    "Python.main.executor": "Run",
-    "Python.plot.executor": "Run",
-    "Python.run.executor": "Run",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "ai.playground.ignore.import.keys.banner.in.settings": "true",
-    "git-widget-placeholder": "master",
-    "ignore.virus.scanning.warn.message": "true",
-    "last_opened_file_path": "C:/pythonWorkspace/qos_aware_user_clustering",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.config.executor&quot;: &quot;Run&quot;,
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;Python.plot.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;ai.playground.ignore.import.keys.banner.in.settings&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/pythonWorkspace/qos_aware_user_clustering&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\pythonWorkspace\qos_aware_user_clustering" />
@@ -92,32 +106,7 @@
       <recent name="C:\pythonWorkspace\qos_aware_user_clustering\src\post_analysis" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.plot">
-    <configuration name="plot" type="PythonConfigurationType" factoryName="Python">
-      <module name="qos_aware_user_clustering" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="SDK_NAME" value="C:\Users\iharm\anaconda3" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="src/post_analysis/plot_sweep_summary.py" />
-      <option name="PARAMETERS" value="--csv src/post_analysis/sweep_phaseB_scaling.csv --out src/post_analysis/phaseB_lowuser" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
+  <component name="RunManager">
     <configuration name="run" type="PythonConfigurationType" factoryName="Python">
       <module name="qos_aware_user_clustering" />
       <option name="ENV_FILES" value="" />
@@ -143,10 +132,6 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <list>
-      <item itemvalue="Python.run" />
-      <item itemvalue="Python.plot" />
-    </list>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -168,6 +153,7 @@
       <workItem from="1769108814213" duration="6823000" />
       <workItem from="1769279117581" duration="592000" />
       <workItem from="1769338916209" duration="10827000" />
+      <workItem from="1769943056919" duration="19615000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -241,7 +227,39 @@
       <option name="project" value="LOCAL" />
       <updated>1769357956339</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="Refactor user and satellite models for improved geometry handling and add new multi-satellite configuration options. Introduce CSV loading and plotting utilities for scenario analysis.">
+      <option name="closed" value="true" />
+      <created>1769943131679</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1769943131679</updated>
+    </task>
+    <task id="LOCAL-00011" summary="Add `.gitignore` to exclude generated plots and IDE-specific files">
+      <option name="closed" value="true" />
+      <created>1769943231523</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1769943231523</updated>
+    </task>
+    <task id="LOCAL-00012" summary="Refactor evaluator logic for consistent beam geometry handling, add radius mode override, and update main plotting setup to include phases A and B. Optimize `refine_load_balance.py` by removing redundant helpers and shifting to grid-based adjacency for overlap refinement.">
+      <option name="closed" value="true" />
+      <created>1769964342752</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1769964342752</updated>
+    </task>
+    <task id="LOCAL-00013" summary="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation.">
+      <option name="closed" value="true" />
+      <created>1769966651660</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1769966651660</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -268,13 +286,18 @@
     <MESSAGE value="Refactor `refine_load_balance.py` to integrate enhanced load-balancing refinement logic with performance optimizations and add `profiling.py` for timing and count tracking utilities." />
     <MESSAGE value="Add sweep phase A CSV files for low demand and parallel scenarios in `post_analysis` directory." />
     <MESSAGE value="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling." />
-    <option name="LAST_COMMIT_MESSAGE" value="Update median demand bandwidth in TrafficConfig from 0.005 to 5 Mbps for accurate QoS modeling." />
+    <MESSAGE value="Refactor user and satellite models for enhanced geometry handling and add multi-satellite configuration support. Introduce new plotting utilities for sweep analysis." />
+    <MESSAGE value="Refactor user and satellite models for improved geometry handling and add new multi-satellite configuration options. Introduce CSV loading and plotting utilities for scenario analysis." />
+    <MESSAGE value="Add `.gitignore` to exclude generated plots and IDE-specific files" />
+    <MESSAGE value="Refactor evaluator logic for consistent beam geometry handling, add radius mode override, and update main plotting setup to include phases A and B. Optimize `refine_load_balance.py` by removing redundant helpers and shifting to grid-based adjacency for overlap refinement." />
+    <MESSAGE value="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation." />
+    <option name="LAST_COMMIT_MESSAGE" value="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$main.coverage" NAME="main Coverage Results" MODIFIED="1768758431251" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1769357985464" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769358191913" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1769970160806" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

@@ -64,8 +64,6 @@ def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) 
 
 
 def main():
-    plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
-    plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
     base = ScenarioConfig()
 
     # -------------------------
@@ -113,7 +111,7 @@ def main():
     # -------------------------
     # Phase B: scaling sweep
     # -------------------------
-    n_users_list = [1000, 2500, 5000, 10000]
+    n_users_list = [1000, 2500, 5000, 10000, 20000, 30000, 50000]
     seeds_b = list(range(1, 6))
 
     configs_b = []

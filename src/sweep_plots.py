@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -168,6 +168,246 @@ def aggregate_by_group_mean_std(df, xcol: str, ycol: str) -> AggSeries:
     )
 
 
+def _unique_sorted_nusers(df) -> np.ndarray:
+    """Return sorted unique n_users values as ints."""
+    if not _has_col(df, "n_users"):
+        return np.asarray([], dtype=int)
+    x = _col(df, "n_users").astype(float, copy=False)
+    x = x[~np.isnan(x)]
+    if x.size == 0:
+        return np.asarray([], dtype=int)
+    # round-close to int
+    xi = np.asarray([int(round(v)) for v in x.tolist()], dtype=int)
+    return np.unique(xi)
+
+
+# ----------------------------
+# Text table helpers
+# ----------------------------
+def _fmt_num(v: Any, *, digits: int = 6) -> str:
+    if v is None:
+        return ""
+    try:
+        if isinstance(v, (float, np.floating)):
+            if np.isnan(v):
+                return "nan"
+            return f"{float(v):.{digits}g}"
+        if isinstance(v, (int, np.integer)):
+            return str(int(v))
+        return str(v)
+    except Exception:
+        return str(v)
+
+
+def _format_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    """Simple fixed-width ASCII table."""
+    cols = len(headers)
+    str_rows: List[List[str]] = []
+    for r in rows:
+        rr = list(r)
+        if len(rr) != cols:
+            raise ValueError("Row length does not match headers.")
+        str_rows.append([str(x) for x in rr])
+
+    widths = [len(h) for h in headers]
+    for r in str_rows:
+        for j in range(cols):
+            widths[j] = max(widths[j], len(r[j]))
+
+    def fmt_row(r: Sequence[str]) -> str:
+        return " | ".join(r[j].ljust(widths[j]) for j in range(cols))
+
+    sep = "-+-".join("-" * w for w in widths)
+    out = []
+    out.append(fmt_row(list(headers)))
+    out.append(sep)
+    for r in str_rows:
+        out.append(fmt_row(r))
+    return "\n".join(out) + "\n"
+
+
+def _write_phaseB_tables_txt(
+    dfB,
+    out_dir: str,
+    *,
+    csv_path: str,
+) -> str:
+    """
+    Writes all Phase-B plot datapoints (mean-per-n_users-per-series) to one text file.
+    Returns output path.
+    """
+    _ensure_out_dir(out_dir)
+    out_path = os.path.join(out_dir, "phaseB_tables.txt")
+
+    if not _has_col(dfB, "n_users"):
+        raise ValueError("CSV missing 'n_users'.")
+
+    nusers = _unique_sorted_nusers(dfB)
+    if nusers.size == 0:
+        raise ValueError("No valid n_users in CSV.")
+
+    # Define Phase-B plotted series (must match plot_phaseB)
+    metric_series: List[Tuple[str, str, Dict[str, str]]] = [
+        ("K_vs_nusers", "K", {
+            "main" : "main_K",
+            "main+qos": "main_ref_K",
+            "main+qos+lb": "main_ref_lb_K",
+            "wk demand rep": "wk_demand_rep_K",
+            "wk qos rep": "wk_qos_rep_K",
+            "bk rep": "bk_rep_K",
+            "tgbp rep": "tgbp_rep_K",
+        }),
+        ("ent_edge_pct_vs_nusers", "enterprise edge exposure (%)", {
+            "main": "main_ent_edge_pct",
+            "main+qos": "main_ref_ent_edge_pct",
+            "main+qos+lb": "main_ref_lb_ent_edge_pct",
+            "wk demand rep": "wk_demand_rep_ent_edge_pct",
+            "wk qos rep": "wk_qos_rep_ent_edge_pct",
+            "bk rep": "bk_rep_ent_edge_pct",
+            "tgbp rep": "tgbp_rep_ent_edge_pct",
+        }),
+        ("Umean_vs_nusers", "U_mean", {
+            "main": "main_U_mean",
+            "main+qos": "main_ref_U_mean",
+            "main+qos+lb": "main_ref_lb_U_mean",
+            "wk demand rep": "wk_demand_rep_U_mean",
+            "wk qos rep": "wk_qos_rep_U_mean",
+            "bk rep": "bk_rep_U_mean",
+            "tgbp rep": "tgbp_rep_U_mean",
+        }),
+        ("Umax_vs_nusers", "U_max", {
+            "main": "main_U_max",
+            "main+qos": "main_ref_U_max",
+            "main+qos+lb": "main_ref_lb_U_max",
+            "wk demand rep": "wk_demand_rep_U_max",
+            "wk qos rep": "wk_qos_rep_U_max",
+            "bk rep": "bk_rep_U_max",
+            "tgbp rep": "tgbp_rep_U_max",
+        }),
+        ("risk_sum_vs_nusers", "risk_sum", {
+            "main": "main_risk_sum",
+            "main+qos": "main_ref_risk_sum",
+            "main+qos+lb": "main_ref_lb_risk_sum",
+            "wk demand rep": "wk_demand_rep_risk_sum",
+            "wk qos rep": "wk_qos_rep_risk_sum",
+            "bk rep": "bk_rep_risk_sum",
+            "tgbp rep": "tgbp_rep_risk_sum",
+        }),
+    ]
+
+    # Runtime plot datapoints
+    my_parts = ["time_split_s", "time_ent_ref_s", "time_lb_ref_s"]
+    present_parts = [c for c in my_parts if _has_col(dfB, c)]
+    if present_parts:
+        runtime_series: Dict[str, str] = {
+            "MY algorithm total": "__my_total_s__",
+            "WKMeans++ (demand) total": "time_baseline_without_qos_s",
+            "WKMeans++ (demand*qos) total": "time_baseline_with_qos_s",
+            "BKMeans total": "time_baseline_bkmeans_s",
+            "TGBP total": "time_baseline_tgbp_s",
+        }
+    else:
+        runtime_series = {}
+
+    # Precompute my_total if possible
+    if runtime_series:
+        n = _nrows(dfB)
+        my_total = np.zeros(n, dtype=float)
+        for c in present_parts:
+            my_total += _col(dfB, c).astype(float, copy=False)
+
+    # Write file
+    lines: List[str] = []
+    lines.append("PHASE B TABLES (datapoints used in plots)\n")
+    lines.append(f"CSV: {csv_path}\n")
+    lines.append("Each row corresponds to a mean-over-seeds datapoint at a given n_users.\n")
+    lines.append("Columns: mean/std/min/max/n are computed over seeds (ignoring NaNs).\n")
+    lines.append("\n")
+
+    for table_name, ylabel, series in metric_series:
+        lines.append("=" * 90 + "\n")
+        lines.append(f"TABLE: {table_name}  (ylabel={ylabel})\n\n")
+
+        headers = ["n_users", "series", "mean", "std", "min", "max", "n"]
+        rows: List[List[str]] = []
+
+        for label, colname in series.items():
+            if not _has_col(dfB, colname):
+                continue
+            agg = aggregate_by_group_mean_std(dfB, "n_users", colname)
+            if agg.x.size == 0:
+                continue
+
+            # Map float x back to int keys
+            x_int = np.asarray([int(round(v)) for v in agg.x.tolist()], dtype=int)
+            m = {int(xi): i for i, xi in enumerate(x_int)}
+
+            for nu in nusers.tolist():
+                if int(nu) not in m:
+                    continue
+                i = m[int(nu)]
+                rows.append([
+                    str(int(nu)),
+                    str(label),
+                    _fmt_num(agg.y_mean[i]),
+                    _fmt_num(agg.y_std[i]),
+                    _fmt_num(agg.y_min[i]),
+                    _fmt_num(agg.y_max[i]),
+                    str(int(agg.n[i])),
+                ])
+
+        # Sort rows by n_users then label for stable output
+        rows_sorted = sorted(rows, key=lambda r: (int(r[0]), r[1]))
+        lines.append(_format_table(headers, rows_sorted))
+        lines.append("\n")
+
+    if runtime_series:
+        lines.append("=" * 90 + "\n")
+        lines.append("TABLE: runtime_methods_vs_nusers  (ylabel=seconds)\n\n")
+
+        # Build a temp df-like view for my_total
+        tmp_my = {"n_users": _col(dfB, "n_users"), "__my_total_s__": my_total}
+
+        headers = ["n_users", "series", "mean_s", "std_s", "min_s", "max_s", "n"]
+        rows: List[List[str]] = []
+
+        for label, colname in runtime_series.items():
+            if colname == "__my_total_s__":
+                agg = aggregate_by_group_mean_std(tmp_my, "n_users", "__my_total_s__")
+            else:
+                if not _has_col(dfB, colname):
+                    continue
+                agg = aggregate_by_group_mean_std(dfB, "n_users", colname)
+
+            if agg.x.size == 0:
+                continue
+            x_int = np.asarray([int(round(v)) for v in agg.x.tolist()], dtype=int)
+            m = {int(xi): i for i, xi in enumerate(x_int)}
+
+            for nu in nusers.tolist():
+                if int(nu) not in m:
+                    continue
+                i = m[int(nu)]
+                rows.append([
+                    str(int(nu)),
+                    str(label),
+                    _fmt_num(agg.y_mean[i]),
+                    _fmt_num(agg.y_std[i]),
+                    _fmt_num(agg.y_min[i]),
+                    _fmt_num(agg.y_max[i]),
+                    str(int(agg.n[i])),
+                ])
+
+        rows_sorted = sorted(rows, key=lambda r: (int(r[0]), r[1]))
+        lines.append(_format_table(headers, rows_sorted))
+        lines.append("\n")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("".join(lines))
+
+    return out_path
+
+
 # ----------------------------
 # Plot helpers
 # ----------------------------
@@ -284,9 +524,6 @@ def plot_runtime_methods_vs_nusers(
 
     # ----- baseline totals (already measured per run) -----
     baselines = {
-        #"time_split_s": "time_split_s",
-        #"time_ent_ref_s": "time_ent_ref_s",
-        #"time_lb_ref_s": "time_lb_ref_s",
         "WKMeans++ (demand) total": "time_baseline_without_qos_s",
         "WKMeans++ (demand*qos) total": "time_baseline_with_qos_s",
         "BKMeans total": "time_baseline_bkmeans_s",
@@ -327,6 +564,9 @@ def plot_runtime_methods_vs_nusers(
 def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     dfB = load_sweep_csv(phaseB_csv)
     _ensure_out_dir(out_dir)
+
+    # --- NEW: write all plot datapoints to a txt table file ---
+    _write_phaseB_tables_txt(dfB, out_dir, csv_path=phaseB_csv)
 
     # K scaling
     plot_lines_vs_nusers(
@@ -408,12 +648,12 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
         show=show,
     )
 
-    # ✅ NEW: All runtime components in a single plot
+    # All runtime components in a single plot
     plot_runtime_methods_vs_nusers(
         dfB,
         out_path=os.path.join(out_dir, "runtime_methods_vs_nusers.png"),
         show=show,
-        use_logy=False,  # set True if needed
+        use_logy=False,
     )
 
 

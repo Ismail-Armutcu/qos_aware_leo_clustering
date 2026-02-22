@@ -20,8 +20,8 @@ from src.split import split_farthest
 from src.profiling import Profiler
 from src.usergen import generate_users, pack_users_raw, build_users_for_sat
 
-# You said you already have these:
-from src.satellites import select_top_n_active_sats, associate_users_balanced
+# NEW satellites API
+from src.satellites import sort_active_sats, associate_users_balanced
 
 
 def _parse_time_utc_iso(s: str) -> datetime:
@@ -51,46 +51,6 @@ def _empty_summary() -> dict[str, Any]:
         "ent_z_p90": 0.0,
         "ent_z_max": 0.0,
     }
-
-
-@dataclass(frozen=True)
-class _MultiSatRuntimeCfg:
-    # Defaults if cfg.multisat does NOT exist
-    tle_path: str = "starlink.tle"
-    elev_mask_deg: float = 25.0
-    n_active: int = 30
-    time_utc_iso: Optional[str] = None
-
-    # Balanced association knobs
-    assoc_load_mode: str = "wq_demand"   # your earlier setting
-    assoc_slack: float = 0.15
-    assoc_max_rounds: int = 6
-    assoc_max_moves: int = 200000
-
-
-def _get_multisat_cfg(cfg: ScenarioConfig) -> _MultiSatRuntimeCfg:
-    """
-    Backward compatible:
-    - If cfg.multisat exists -> read fields from it
-    - Else -> use defaults
-    """
-    ms = getattr(cfg, "multisat", None)
-    if ms is None:
-        return _MultiSatRuntimeCfg()
-
-    def g(name: str, default: Any) -> Any:
-        return getattr(ms, name, default)
-
-    return _MultiSatRuntimeCfg(
-        tle_path=g("tle_path", "starlink.tle"),
-        elev_mask_deg=float(g("elev_mask_deg", 25.0)),
-        n_active=int(g("n_active", 30)),
-        time_utc_iso=g("time_utc_iso", None),
-        assoc_load_mode=str(g("assoc_load_mode", "wq_demand")),
-        assoc_slack=float(g("assoc_slack", 0.15)),
-        assoc_max_rounds=int(g("assoc_max_rounds", 6)),
-        assoc_max_moves=int(g("assoc_max_moves", 200000)),
-    )
 
 
 def split_to_feasible(users, cfg: ScenarioConfig, prof: Profiler | None = None, max_clusters: int = 5000):
@@ -146,7 +106,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     Restores BK-Means + TGBP baselines and returns ALL keys required by helper.flatten_run_record().
     """
     prof = Profiler()
-    ms = _get_multisat_cfg(cfg)
+    ms = cfg.multisat  # no wrappers/fallbacks
 
     # 1) Generate users (sat-agnostic)
     prof.tic("usergen")
@@ -163,39 +123,39 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
     print_config(cfg)
 
-    # 2) Select active satellites at a valid instant
-    # Reference site: bbox center (no cfg.ref_site_llh dependency)
-    try:
-        ref_lat = float(getattr(cfg, "lat0_deg"))
-        ref_lon = float(getattr(cfg, "lon0_deg"))
-    except Exception:
-        b = cfg.bbox
-        ref_lat = (b.lat_min + b.lat_max) / 2.0
-        ref_lon = (b.lon_min + b.lon_max) / 2.0
-    ref_h = 0.0
-
+    # 2) Select active satellites (NEW: multi-anchor + greedy marginal gain)
+    # Optional fixed snapshot time (UTC) for reproducibility
     t0_utc = _parse_time_utc_iso(ms.time_utc_iso) if ms.time_utc_iso else None
 
+    # Anchor grid knobs (fast, minimal data). Keep hard-coded unless you add cfg fields.
+    n_lat_anchors = 3
+    n_lon_anchors = 3
+    quality_mode = "sin"
+
     prof.tic("sat_select")
-    t0_utc, active_sats = select_top_n_active_sats(
-        tle_path=ms.tle_path,
-        n_active=ms.n_active,
-        elev_mask_deg=ms.elev_mask_deg,
-        ref_lat_deg=ref_lat,
-        ref_lon_deg=ref_lon,
-        ref_height_m=ref_h,
+    t0_utc, active_sats = sort_active_sats(
+        cfg,
         t0_utc=t0_utc,
+        n_lat_anchors=n_lat_anchors,
+        n_lon_anchors=n_lon_anchors,
+        quality_mode=quality_mode,
     )
     prof.toc("sat_select")
 
     if len(active_sats) == 0:
-        raise RuntimeError("No active satellites found above elev mask at the reference site.")
+        raise RuntimeError("No active satellites found above elev mask at any anchor in the region bbox.")
 
     sat_ecef_m = np.stack([s.ecef_m for s in active_sats], axis=0)
 
     if verbose:
-        print(f"\nSelected {len(active_sats)} active sats @ {t0_utc.isoformat()} (UTC), ref=({ref_lat:.3f},{ref_lon:.3f}), mask={ms.elev_mask_deg:.1f}°")
-        print(f"Top sat elevation at ref: {active_sats[0].elev_ref_deg:.1f}°, bottom: {active_sats[-1].elev_ref_deg:.1f}°")
+        print(
+            f"\nSelected {len(active_sats)} active sats @ {t0_utc.isoformat()} (UTC), "
+            f"anchors={n_lat_anchors}x{n_lon_anchors}, mask={ms.elev_mask_deg:.1f}°"
+        )
+        print(
+            f"Top sat max-elev across anchors: {active_sats[0].elev_ref_deg:.1f}°, "
+            f"bottom: {active_sats[-1].elev_ref_deg:.1f}°"
+        )
 
     # 3) Balanced association users -> satellite
     prof.tic("assoc")
@@ -291,7 +251,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         pieces_wk_qos_fixed.append((users_sat, base_wq["fixedK"]["clusters"], base_wq["fixedK"]["evals"]))
         pieces_wk_qos_rep.append((users_sat, base_wq["repaired"]["clusters"], base_wq["repaired"]["evals"]))
 
-        # --- FastBP paper baselines (BK-Means + TGBP)  ✅ RESTORED
+        # --- FastBP paper baselines (BK-Means + TGBP)
         if enable_fastbp:
             prof.tic("baseline_bkmeans")
             out_bk = run_bkmeans_baseline(users_sat, cfg, K_hint=K_ref)

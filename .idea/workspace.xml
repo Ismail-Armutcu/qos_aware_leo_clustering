@@ -4,12 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation.">
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Add functionality to write Phase-B plot datapoints to a text file: implement unique user count extraction, format tables, and handle runtime metrics. Enhance sweep_plots.py with new helper functions for data processing and output.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/evaluator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/refine_load_balance.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/refine_load_balance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plots/phaseB/phaseB_tables.txt" beforeDir="false" afterPath="$PROJECT_DIR$/plots/phaseB/phaseB_tables.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/satellites.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/satellites.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseA.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseA.csv" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseB.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseB.csv" afterDir="false" />
     </list>
@@ -23,9 +22,15 @@
       <entry key="_C:/pythonWorkspace/qos_aware_user_clustering" value="38RLrA7PU7CqlQrldn5I1a1vPLf" />
     </persistenceIdMap>
   </component>
+  <component name="CopilotUserSelectedModel">
+    <selectedModels>
+      <entry key="chat-panel" value="GPT-5 mini" />
+      <entry key="agent-panel" value="GPT-5 mini" />
+      <entry key="edit-panel" value="GPT-5 mini" />
+    </selectedModels>
+  </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="78" />
-    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+    <option name="cachedIndexableFilesCount" value="68" />
   </component>
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
@@ -154,6 +159,7 @@
       <workItem from="1769279117581" duration="592000" />
       <workItem from="1769338916209" duration="10827000" />
       <workItem from="1769943056919" duration="19615000" />
+      <workItem from="1771764917175" duration="2602000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -297,7 +303,7 @@
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$main.coverage" NAME="main Coverage Results" MODIFIED="1768758431251" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769358191913" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1769970160806" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1771769744505" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

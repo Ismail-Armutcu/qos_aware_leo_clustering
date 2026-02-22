@@ -3,19 +3,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 
 from src.coords import unit
 
+if TYPE_CHECKING:
+    from config import ScenarioConfig, BBox
 
+
+# -----------------------------
+# Data structures
+# -----------------------------
 @dataclass(frozen=True)
 class ActiveSat:
     """Active satellite at a given instant (snapshot)."""
     name: str
     ecef_m: np.ndarray   # (3,)
-    elev_ref_deg: float  # elevation at reference site (for debug)
+    elev_ref_deg: float  # DEBUG: max elevation across anchors (not a single reference site)
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,209 @@ class AssocResult:
     n_moves: int
 
 
+@dataclass(frozen=True)
+class Anchor:
+    lat_deg: float
+    lon_deg: float
+    height_m: float = 0.0
+
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+def _parse_utc_iso(iso_z: str) -> datetime:
+    """
+    Parse an ISO time string. Accepts 'Z' suffix for UTC.
+    Returns timezone-aware UTC datetime.
+    """
+    s = iso_z.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        # Interpret naive as UTC
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _choose_snapshot_time_utc(sats: Sequence[object]) -> datetime:
+    """
+    Deterministic snapshot selection: midpoint of TLE epoch span (UTC).
+    """
+    epochs = [sat.epoch.utc_datetime() for sat in sats]
+    t_min = min(epochs)
+    t_max = max(epochs)
+    t0 = t_min + (t_max - t_min) / 2
+    if t0.tzinfo is None:
+        return t0.replace(tzinfo=timezone.utc)
+    return t0.astimezone(timezone.utc)
+
+
+def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anchor]:
+    """
+    Build an n_lat x n_lon anchor grid over the region bounding box.
+    Anchor-only selection is fast and does not require user data.
+    """
+    if n_lat < 2 or n_lon < 2:
+        raise ValueError("Anchor grid must be at least 2x2 (use 3x3 by default).")
+
+    lats = np.linspace(float(bbox.lat_min), float(bbox.lat_max), int(n_lat))
+    lons = np.linspace(float(bbox.lon_min), float(bbox.lon_max), int(n_lon))
+    anchors: List[Anchor] = []
+    for lat in lats:
+        for lon in lons:
+            anchors.append(Anchor(lat_deg=float(lat), lon_deg=float(lon), height_m=0.0))
+    return anchors
+
+
+def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "sin") -> np.ndarray:
+    """
+    Convert elevation (deg) to a nonnegative "quality" q, with q=0 below mask.
+
+    mode:
+      - "sin":    q = sin(e)
+      - "sin2":   q = sin(e)^2 (penalizes low elevation more)
+      - "linear": q = e (deg)
+    """
+    q = np.zeros_like(elev_deg, dtype=np.float64)
+    mask = elev_deg >= float(emin_deg)
+    if not np.any(mask):
+        return q
+
+    if mode == "sin":
+        q[mask] = np.sin(np.deg2rad(elev_deg[mask]))
+    elif mode == "sin2":
+        s = np.sin(np.deg2rad(elev_deg[mask]))
+        q[mask] = s * s
+    elif mode == "linear":
+        q[mask] = elev_deg[mask]
+    else:
+        raise ValueError(f"Unknown quality mode: {mode}")
+    return q
+
+
+# -----------------------------
+# New satellite selection API
+# -----------------------------
+def sort_active_sats(
+    scenarioConfig: "ScenarioConfig",
+    *,
+    t0_utc: Optional[datetime] = None,
+    n_lat_anchors: int = 3,
+    n_lon_anchors: int = 3,
+    quality_mode: str = "sin",
+) -> tuple[datetime, List[ActiveSat]]:
+    """
+    Load a TLE file, choose a snapshot time t0, then select active satellites using:
+
+      (1) Multi-anchor visibility filter:
+          keep satellites visible (elev >= mask) at ANY anchor over the region bbox.
+
+      (2) Greedy marginal-gain ordering (anchors only):
+          iteratively pick satellites that maximize the additional anchor quality
+          not already provided by the selected set.
+
+    Returns
+    -------
+    (t0_utc, active_sats)
+      - t0_utc: UTC timezone-aware datetime
+      - active_sats: List[ActiveSat] in greedy order, length <= scenarioConfig.multisat.n_active
+
+    Notes
+    -----
+    - This fully replaces the old reference-site elevation sorting logic.
+    - 'elev_ref_deg' is kept for compatibility but now stores the MAX elevation across anchors.
+    """
+    # Skyfield import inside to keep the rest of the project usable without it.
+    from skyfield.api import load, wgs84
+    from skyfield.framelib import itrs
+
+    tle_path = scenarioConfig.multisat.tle_path
+    emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
+    n_active = int(scenarioConfig.multisat.n_active)
+    bbox = scenarioConfig.bbox
+
+    ts = load.timescale()
+    sats = load.tle_file(tle_path)
+    if len(sats) == 0:
+        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
+
+    # Snapshot time
+    if t0_utc is not None:
+        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
+    elif scenarioConfig.multisat.time_utc_iso is not None:
+        t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
+    else:
+        t0 = _choose_snapshot_time_utc(sats)
+
+    t = ts.from_datetime(t0)
+
+    # Anchors over region
+    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
+    P = len(anchors)
+    N = len(sats)
+
+    # Pre-create anchor observer objects
+    obs = [wgs84.latlon(a.lat_deg, a.lon_deg, elevation_m=a.height_m) for a in anchors]
+
+    # Elevation matrix: elev[p, s]
+    elev = np.empty((P, N), dtype=np.float32)
+    for si, sat in enumerate(sats):
+        for pi, o in enumerate(obs):
+            alt, _, _ = (sat - o).at(t).altaz()
+            elev[pi, si] = float(alt.degrees)
+
+    # (1) Multi-anchor visibility filter: visible at ANY anchor
+    cand_mask = (elev >= emin_deg).any(axis=0)
+    cand_idx = np.where(cand_mask)[0]
+    if cand_idx.size == 0:
+        return t0, []
+
+    elev_c = elev[:, cand_idx].astype(np.float64)  # (P, Mc)
+
+    # Anchor quality q[p, j]
+    q = _quality_from_elev_deg(elev_c, emin_deg=emin_deg, mode=quality_mode)
+
+    # (2) Greedy marginal-gain ordering
+    Mc = q.shape[1]
+    best = np.zeros(P, dtype=np.float64)
+    chosen = np.zeros(Mc, dtype=bool)
+    order_local: List[int] = []
+
+    kmax = min(n_active, Mc)
+    for _ in range(kmax):
+        improvement = np.maximum(q - best[:, None], 0.0)  # (P,Mc)
+        delta = improvement.sum(axis=0)                   # (Mc,)
+        delta[chosen] = -1.0
+
+        j = int(np.argmax(delta))
+        if delta[j] <= 0.0:
+            break  # no further improvement anywhere
+        chosen[j] = True
+        order_local.append(j)
+        best = np.maximum(best, q[:, j])
+
+    selected_sat_idx = cand_idx[np.array(order_local, dtype=int)]
+
+    # Build ActiveSat list in greedy order
+    active: List[ActiveSat] = []
+    for si in selected_sat_idx:
+        sat = sats[int(si)]
+        # Satellite ECEF position at t0
+        p_km = sat.at(t).frame_xyz(itrs).km  # (3,)
+        ecef_m = np.array(p_km, dtype=float) * 1000.0
+
+        # DEBUG: max elevation across anchors
+        el_max = float(elev[:, int(si)].max())
+
+        active.append(ActiveSat(name=sat.name, ecef_m=ecef_m, elev_ref_deg=el_max))
+
+    return t0, active
+
+
+# -----------------------------
+# Association logic (unchanged)
+# -----------------------------
 def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarray:
     """
     Compute elevation angles for all user-sat pairs.
@@ -56,67 +265,6 @@ def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarr
         elev[:, s] = np.degrees(np.arcsin(sin_el)).astype(np.float32)
 
     return elev
-
-
-def select_top_n_active_sats(
-    tle_path: str,
-    n_active: int,
-    elev_mask_deg: float,
-    ref_lat_deg: float,
-    ref_lon_deg: float,
-    ref_height_m: float = 0.0,
-    t0_utc: datetime | None = None,
-) -> tuple[datetime, List[ActiveSat]]:
-    """
-    Load a TLE file, pick a valid snapshot time (t0), then select Top-N sats by
-    elevation at a reference site, and return their ECEF positions at t0.
-
-    - If t0_utc is None, choose the midpoint of TLE epoch range.
-    - Keep only sats with elevation >= elev_mask_deg at the reference site.
-    """
-    # Skyfield import inside to keep the rest of the project usable without it.
-    from skyfield.api import load, wgs84
-    from skyfield.framelib import itrs
-
-    ts = load.timescale()
-    sats = load.tle_file(tle_path)
-
-    if len(sats) == 0:
-        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
-
-    # Choose t0 inside epoch span if not provided
-    if t0_utc is None:
-        epochs = [sat.epoch.utc_datetime() for sat in sats]
-        t_min = min(epochs)
-        t_max = max(epochs)
-        t0_utc = t_min + (t_max - t_min) / 2
-        if t0_utc.tzinfo is None:
-            t0_utc = t0_utc.replace(tzinfo=timezone.utc)
-        else:
-            t0_utc = t0_utc.astimezone(timezone.utc)
-
-    t = ts.from_datetime(t0_utc)
-
-    ref = wgs84.latlon(ref_lat_deg, ref_lon_deg, elevation_m=ref_height_m)
-
-    visible: list[tuple[float, object]] = []
-    for sat in sats:
-        alt, az, dist = (sat - ref).at(t).altaz()
-        el = float(alt.degrees)
-        if el >= elev_mask_deg:
-            visible.append((el, sat))
-
-    visible.sort(key=lambda x: x[0], reverse=True)
-    visible = visible[:n_active]
-
-    active: List[ActiveSat] = []
-    for el, sat in visible:
-        # Satellite ECEF position at t0
-        p_km = sat.at(t).frame_xyz(itrs).km  # (3,)
-        ecef_m = np.array(p_km, dtype=float) * 1000.0
-        active.append(ActiveSat(name=sat.name, ecef_m=ecef_m, elev_ref_deg=el))
-
-    return t0_utc, active
 
 
 def associate_users_balanced(

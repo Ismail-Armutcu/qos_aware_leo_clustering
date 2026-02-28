@@ -211,7 +211,7 @@ def refine_load_balance_by_overlap(
 
     # Per-user constants
     snr_const_db = _snr_const_db_all(users, cfg)  # (N,)
-    wdemand = users.qos_w * users.demand_mbps     # (N,)
+    demand = users.demand_mbps     # (N,)
     is_ent = (users.qos_w == 4)
 
     # Initial per-cluster metrics under frozen beams
@@ -225,7 +225,7 @@ def refine_load_balance_by_overlap(
             continue
 
         rates = _rate_mbps_vec(users.u_sat2user[S], u_c[k], float(theta_3db[k]), snr_const_db[S], cfg)
-        share = wdemand[S] / (rates + 1e-9)
+        share = demand[S] / (rates + 1e-9)
         U[k] = float(share.sum())
 
         dist = np.linalg.norm(users.xy_m[S] - centers_xy[k][None, :], axis=1)
@@ -340,7 +340,7 @@ def refine_load_balance_by_overlap(
                         snr_const_db[S_from],
                         cfg,
                     )
-                    share_from = wdemand[S_from] / (rates_from + 1e-9)
+                    share_from = demand[S_from] / (rates_from + 1e-9)
 
                     # Candidate users: largest share first
                     if prefer_non_ent:
@@ -411,7 +411,7 @@ def refine_load_balance_by_overlap(
                             snr_const_db_uid=float(snr_const_db[uid]),
                             cfg=cfg,
                         )
-                        s_to = float(wdemand[uid]) / (rate_to + 1e-9)
+                        s_to = float(demand[uid]) / (rate_to + 1e-9)
                         U_to_new = U[recv_arr2] + s_to
 
                         ok_cap = U_to_new <= (1.0 + 1e-9)

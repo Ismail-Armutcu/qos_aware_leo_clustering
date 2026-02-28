@@ -273,7 +273,7 @@ def associate_users_balanced(
     user_qos_w: np.ndarray,
     sat_ecef_m: np.ndarray,
     elev_mask_deg: float,
-    load_mode: str = "wq_demand",   # "count" | "demand" | "wq_demand"
+    load_mode: str = "demand",   # "count" | "demand" | "wq_demand"
     slack: float = 0.15,
     max_rounds: int = 6,
     max_total_moves: int = 200000,

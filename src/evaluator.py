@@ -105,8 +105,9 @@ def evaluate_cluster(
     rate_mbps = shannon_rate_mbps(snr, cfg.phy.bandwidth_hz, cfg.phy.eta)
 
     # capacity (time-share)
-    wd = users.qos_w[S] * users.demand_mbps[S]
-    s_share = wd / (rate_mbps + 1e-9)
+    # capacity (time-share) -- UNWEIGHTED demand (physical traffic)
+    d = users.demand_mbps[S]
+    s_share = d / (rate_mbps + 1e-9)
     U = float(s_share.sum())
     cap_ok = (U <= 1.0 + 1e-9)
 

@@ -49,6 +49,7 @@ class TrafficConfig:
     demand_mbps_median: float = 5
     demand_logn_sigma: float = 0.6
     qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)  # eco/std/ent
+    demand_median_mult_by_qos: Tuple[float, float, float] = (0.7, 1.0, 2.0)  # eco/std/ent
 
 
 @dataclass(frozen=True)

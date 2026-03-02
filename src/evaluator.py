@@ -19,10 +19,13 @@ def evaluate_cluster(
     cfg,
     center_xy_override: np.ndarray | None = None,
     center_ecef_override: np.ndarray | None = None,
-    R_m_override: float | None = None,
+    R_m_override: float | None = None
 ):
     """
     Evaluate one cluster.
+
+    IMPORTANT CONTRACT (for summarize_*):
+      - If returned dict has R_m != None, it MUST include 'z' with len(z)==len(cluster).
 
     Optional overrides:
       - center_xy_override : force XY center (meters)
@@ -50,18 +53,10 @@ def evaluate_cluster(
     # --- radius mode ---
     if R_m_override is not None:
         R_m = float(R_m_override)
-        if req_m > R_m + 1e-9:
-            return {
-                "feasible": False,
-                "reason": "geom",
-                "center_xy_m": c_xy,
-                "center_ecef_m": None,
-                "R_m": float(R_m),
-                "req_m": req_m,
-            }
     else:
         R_m = choose_radius_mode_m(req_m, cfg.beam.radius_modes_km)
         if R_m is None:
+            # No beam mode can cover this cluster at all
             return {
                 "feasible": False,
                 "reason": "geom",
@@ -69,6 +64,7 @@ def evaluate_cluster(
                 "center_ecef_m": None,
                 "R_m": None,
                 "req_m": req_m,
+                "z": None,
             }
         R_m = float(R_m)
 
@@ -77,6 +73,27 @@ def evaluate_cluster(
         c_ecef = np.asarray(center_ecef_override, dtype=float).reshape(3)
     else:
         c_ecef = users.ecef_m[S].mean(axis=0)
+
+    # Always compute z whenever R_m is known (even if infeasible)
+    z = dist_m / (R_m + 1e-9)
+
+    # If override radius is too small, return geom-infeasible but WITH z (critical!)
+    if R_m_override is not None and req_m > R_m + 1e-9:
+        rho = float(cfg.ent.rho_safe)
+        ent = (users.qos_w[S] == 4)
+        risk = float(np.sum(np.maximum(0.0, z[ent] - rho) ** 2))
+        return {
+            "feasible": False,
+            "reason": "geom",
+            "center_xy_m": c_xy,
+            "center_ecef_m": c_ecef,
+            "R_m": float(R_m),
+            "req_m": req_m,
+            "U": float("nan"),
+            "risk": risk,
+            "rate_mbps": None,
+            "z": z,
+        }
 
     # boresight sat->center
     v_c = c_ecef - users.sat_ecef_m
@@ -104,8 +121,7 @@ def evaluate_cluster(
     )
     rate_mbps = shannon_rate_mbps(snr, cfg.phy.bandwidth_hz, cfg.phy.eta)
 
-    # capacity (time-share)
-    # capacity (time-share) -- UNWEIGHTED demand (physical traffic)
+    # capacity (time-share) -- UNWEIGHTED demand
     d = users.demand_mbps[S]
     s_share = d / (rate_mbps + 1e-9)
     U = float(s_share.sum())
@@ -113,7 +129,6 @@ def evaluate_cluster(
 
     # enterprise edge-risk
     rho = float(cfg.ent.rho_safe)
-    z = dist_m / (R_m + 1e-9)
     ent = (users.qos_w[S] == 4)
     risk = float(np.sum(np.maximum(0.0, z[ent] - rho) ** 2))
 
@@ -128,7 +143,7 @@ def evaluate_cluster(
         "risk": risk,
         "rate_mbps": rate_mbps,
         "z": z,
-        # exposed for downstream speed (LB etc.)
+        # extra cached stuff (ok to keep)
         "u_c": u_c,
         "d_center": d_center,
         "theta_3db": theta_3db,

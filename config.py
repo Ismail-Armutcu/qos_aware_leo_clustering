@@ -21,7 +21,7 @@ DEBUG_BBOX  = BBox(39.5, 40.3, 32.3, 33.3)
 
 
 # -----------------------------
-# Grouped config blocks (KEEP YOUR ORIGINAL CONTRACT)
+# Grouped config blocks
 # -----------------------------
 @dataclass(frozen=True)
 class PhyConfig:
@@ -46,10 +46,16 @@ class EnterpriseConfig:
 
 @dataclass(frozen=True)
 class TrafficConfig:
+    # Baseline traffic model
     demand_mbps_median: float = 5
     demand_logn_sigma: float = 0.6
-    qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)  # eco/std/ent
-    demand_median_mult_by_qos: Tuple[float, float, float] = (0.7, 1.0, 2.0)  # eco/std/ent
+
+    # QoS distribution (eco/std/ent)
+    qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)
+
+    # NEW (you said you already added it): demand conditional on QoS
+    # Multipliers applied to demand_mbps_median for (eco, std, ent)
+    demand_median_mult_by_qos: Tuple[float, float, float] = (0.7, 1.0, 2.0)
 
 
 @dataclass(frozen=True)
@@ -68,11 +74,11 @@ class LoadBalanceRefineConfig:
     k_users_from_donor: int = 20
     intersect_margin_m: float = 0.1
     objective: str = "max"
-    prefer_non_enterprise: bool = False   # CHANGED
-    risk_slack: float = 1e-4              # CHANGED
+    prefer_non_enterprise: bool = False
+    risk_slack: float = 1e-4
     exposure_slack: int = 0
     allow_receiver_close_to_full: bool = False
-    receiver_u_max: float = 0.995         # CHANGED
+    receiver_u_max: float = 0.995
 
 
 @dataclass(frozen=True)
@@ -95,26 +101,47 @@ class RunConfig:
 
 
 # -----------------------------
-# NEW: Multi-satellite snapshot config (ADDED, NOT REPLACING ANYTHING)
+# Multi-satellite snapshot config
 # -----------------------------
 @dataclass(frozen=True)
 class MultiSatConfig:
     tle_path: str = "starlink.tle"
     elev_mask_deg: float = 25.0
-    n_active: int = 10
+    n_active: int = 30
 
     # Optional fixed snapshot time for reproducibility (ISO string)
     # Example: "2026-01-29T16:19:56Z"
     time_utc_iso: Optional[str] = None
 
-    # Reference point to pick top-N satellites
+    # Reference point (kept for compatibility)
     ref_site_mode: Literal["bbox_center", "ankara"] = "bbox_center"
 
-    # Balanced association knobs (if your pipeline uses them)
-    assoc_load_mode: Literal["count", "demand", "wq_demand"] = "wq_demand"
+    # Balanced association knobs
+    # IMPORTANT: default is now physical demand (NOT demand*qos)
+    assoc_load_mode: Literal["count", "demand", "wq_demand"] = "demand"
     assoc_slack: float = 0.15
     assoc_max_rounds: int = 6
     assoc_max_moves: int = 200000
+
+
+# -----------------------------
+# NEW: Payload feasibility config
+# -----------------------------
+@dataclass(frozen=True)
+class PayloadConfig:
+    enabled: bool = True
+
+    # Satellite beam-hopping time lanes:
+    # constraint per satellite: sum_b U_{s,b} <= J_lanes
+    J_lanes: float = 16.0
+
+    # Inner repair loop limits (cluster-level offloads)
+    max_rounds: int = 8
+    max_offloads_per_round: int = 12
+
+    # Outer loop (min satellites): linear scan prefixes 1..m.
+    # If None: uses all active_sats returned by sort_active_sats.
+    max_prefix: Optional[int] = None
 
 
 # -----------------------------
@@ -134,8 +161,8 @@ class ScenarioConfig:
     lb_refine: LoadBalanceRefineConfig = LoadBalanceRefineConfig()
     usergen: HotspotGenConfig = HotspotGenConfig()
 
-    # NEW
     multisat: MultiSatConfig = MultiSatConfig()
+    payload: PayloadConfig = PayloadConfig()
 
     @property
     def bbox(self) -> BBox:
@@ -153,7 +180,7 @@ class ScenarioConfig:
 
     @property
     def ref_site_llh(self) -> tuple[float, float, float]:
-        """Reference site used to pick Top-N satellites from TLE file."""
+        """Reference site used to pick Top-N satellites from TLE file (legacy)."""
         if self.multisat.ref_site_mode == "ankara":
             return (39.9334, 32.8597, 0.0)
         return (self.lat0_deg, self.lon0_deg, 0.0)

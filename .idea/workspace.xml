@@ -4,14 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor `pipeline.py` for compatibility with the new satellites API: replace `select_top_n_active_sats` with `sort_active_sats`, remove `_get_multisat_cfg` wrapper, and update satellite selection logic for multi-anchor support. Adjust comments and verbose outputs for clarity. Update Phase-B table values in `phaseB_tables.txt`.">
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor load balancing and evaluation logic for unweighted demand: replace weighted demand with physical traffic-based calculations in `evaluator.py` and `refine_load_balance.py`. Update QoS demand multipliers in `config.py` and Phase-B table paths in `plots`.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plots/phaseB/phaseB_tables.txt" beforeDir="false" afterPath="$PROJECT_DIR$/plots/phaseBold/phaseB_tables.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/helper.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/helper.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/refine_load_balance.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/refine_load_balance.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/satellites.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/satellites.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/usergen.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/usergen.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseA.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseA.csv" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseB.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseB.csv" afterDir="false" />
     </list>
@@ -33,7 +32,7 @@
     </selectedModels>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="61" />
+    <option name="cachedIndexableFilesCount" value="68" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="FileTemplateManagerImpl">
@@ -164,7 +163,8 @@
       <workItem from="1769338916209" duration="10827000" />
       <workItem from="1769943056919" duration="19615000" />
       <workItem from="1771764917175" duration="2685000" />
-      <workItem from="1772303309290" duration="1580000" />
+      <workItem from="1772303309290" duration="5190000" />
+      <workItem from="1772476806069" duration="682000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -278,7 +278,15 @@
       <option name="project" value="LOCAL" />
       <updated>1771770142375</updated>
     </task>
-    <option name="localTasksCounter" value="15" />
+    <task id="LOCAL-00015" summary="Refactor load balancing and evaluation logic for unweighted demand: replace weighted demand with physical traffic-based calculations in `evaluator.py` and `refine_load_balance.py`. Update QoS demand multipliers in `config.py` and Phase-B table paths in `plots`.">
+      <option name="closed" value="true" />
+      <created>1772306556565</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1772306556565</updated>
+    </task>
+    <option name="localTasksCounter" value="16" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -312,13 +320,14 @@
     <MESSAGE value="Revamp README for enhanced clarity and detail: rename project, add feature breakdown, architecture overview, installation steps, usage examples, advanced configurations, and comprehensive module documentation." />
     <MESSAGE value="Add functionality to write Phase-B plot datapoints to a text file: implement unique user count extraction, format tables, and handle runtime metrics. Enhance sweep_plots.py with new helper functions for data processing and output." />
     <MESSAGE value="Refactor `pipeline.py` for compatibility with the new satellites API: replace `select_top_n_active_sats` with `sort_active_sats`, remove `_get_multisat_cfg` wrapper, and update satellite selection logic for multi-anchor support. Adjust comments and verbose outputs for clarity. Update Phase-B table values in `phaseB_tables.txt`." />
-    <option name="LAST_COMMIT_MESSAGE" value="Refactor `pipeline.py` for compatibility with the new satellites API: replace `select_top_n_active_sats` with `sort_active_sats`, remove `_get_multisat_cfg` wrapper, and update satellite selection logic for multi-anchor support. Adjust comments and verbose outputs for clarity. Update Phase-B table values in `phaseB_tables.txt`." />
+    <MESSAGE value="Refactor load balancing and evaluation logic for unweighted demand: replace weighted demand with physical traffic-based calculations in `evaluator.py` and `refine_load_balance.py`. Update QoS demand multipliers in `config.py` and Phase-B table paths in `plots`." />
+    <option name="LAST_COMMIT_MESSAGE" value="Refactor load balancing and evaluation logic for unweighted demand: replace weighted demand with physical traffic-based calculations in `evaluator.py` and `refine_load_balance.py`. Update QoS demand multipliers in `config.py` and Phase-B table paths in `plots`." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$main.coverage" NAME="main Coverage Results" MODIFIED="1768758431251" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769358191913" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1771769744505" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1772313408047" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

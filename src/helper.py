@@ -354,7 +354,11 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     }
 
     # Optional multi-sat metadata (if present)
-    for k in ["ms_tle_path", "ms_time_utc", "ms_elev_mask_deg", "ms_n_active", "ms_n_unserved", "ms_assoc_moves"]:
+    for k in [
+        "payload_enabled", "payload_J_lanes", "payload_feasible",
+        "payload_best_m", "payload_n_viol", "payload_T_max", "payload_T_sum",
+        "payload_global_cap", "payload_global_impossible",
+    ]:
         if k in rec:
             row[k] = rec[k]
 

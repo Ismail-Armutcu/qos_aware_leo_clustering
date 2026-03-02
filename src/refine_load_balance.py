@@ -16,9 +16,6 @@ def _build_overlap_adjacency_grid(
     """
     Grid-hash overlap adjacency:
         overlap if dist(center_k, center_j) <= Rk + Rj + margin
-
-    Returns:
-        adjacency[k] = np.ndarray of neighbor indices overlapping with k.
     """
     K = int(centers_xy.shape[0])
     adjacency: List[np.ndarray] = [np.array([], dtype=int) for _ in range(K)]
@@ -47,7 +44,6 @@ def _build_overlap_adjacency_grid(
 
     neigh_offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]
 
-    # Build symmetric adjacency once by considering candidates with id > k
     for k in idx_valid:
         ck = centers_xy[k]
         rk = float(radii_m[k])
@@ -79,7 +75,6 @@ def _build_overlap_adjacency_grid(
         for j in js:
             adjacency[j] = np.concatenate([adjacency[j], np.array([k], dtype=int)])
 
-    # Deduplicate
     for k in range(K):
         if adjacency[k].size > 1:
             adjacency[k] = np.unique(adjacency[k])
@@ -88,10 +83,6 @@ def _build_overlap_adjacency_grid(
 
 
 def _snr_const_db_all(users, cfg) -> np.ndarray:
-    """
-    snr_db = snr_const_db + g_db, where:
-      snr_const_db = eirp_dbw - fspl_db - loss_misc_db - (noise_psd_dbw_hz + 10log10(B))
-    """
     fspl = fspl_db(users.range_m, cfg.phy.carrier_freq_hz)
     noise_total_db = float(cfg.phy.noise_psd_dbw_hz) + 10.0 * np.log10(float(cfg.phy.bandwidth_hz) + 1e-12)
     return float(cfg.phy.eirp_dbw) - fspl - float(cfg.phy.loss_misc_db) - noise_total_db
@@ -104,7 +95,6 @@ def _rate_mbps_vec(
     snr_const_db: np.ndarray,
     cfg,
 ) -> np.ndarray:
-    """Vector rate for a set of users served by ONE beam (scalar theta_3db)."""
     cosang = np.clip(u_sat2user @ u_c, -1.0, 1.0)
     theta = np.arccos(cosang)
     g_db = gain_db_gaussian(theta, float(theta_3db))
@@ -116,10 +106,6 @@ _LN2 = float(np.log(2.0))
 
 
 def _gain_db_gaussian_multi(theta_rad: np.ndarray, theta_3db_rad: np.ndarray) -> np.ndarray:
-    """
-    Gaussian mainlobe gain with per-sample theta_3db (vectorized).
-    Matches src.phy.gain_db_gaussian() for scalar theta_3db.
-    """
     g_lin = np.exp(-_LN2 * (theta_rad / (theta_3db_rad + 1e-12)) ** 2)
     return 10.0 * np.log10(g_lin + 1e-12)
 
@@ -132,9 +118,6 @@ def _rate_uid_to_beams(
     snr_const_db_uid: float,
     cfg,
 ) -> np.ndarray:
-    """
-    Rate for a single uid if served by multiple beams (beam_ids). Vectorized over beams.
-    """
     cosang = np.clip(u_c[beam_ids] @ u_uid, -1.0, 1.0)   # (M,)
     theta = np.arccos(cosang)                             # (M,)
     g_db = _gain_db_gaussian_multi(theta, theta_3db[beam_ids])
@@ -154,22 +137,6 @@ def refine_load_balance_by_overlap(
     evals: List[dict],
     prof: Any | None = None,
 ) -> Tuple[List[np.ndarray], List[dict], Dict[str, Any]]:
-    """
-    Load-balance refinement (FAST, improved U_max quality):
-
-      - Frozen beams during LB: centers/R are taken from evals and never change.
-      - Incremental updates for U / enterprise risk / exposed count.
-      - Objective:
-          * "max": minimize U_max using a peak-aware acceptance rule:
-              - if multiple clusters sit at current max, accept "peak-count reducing" moves
-                that pull a peak donor below max without pushing receiver to max.
-              - if unique peak, accept only moves that reduce the peak value.
-          * "range"/"var": keep standard objective improvement checks.
-
-    End-of-stage:
-      - Recompute evals ONLY for clusters touched by accepted moves, using evaluate_cluster() with overrides
-        to match the frozen beam geometry.
-    """
     if not cfg.lb_refine.enabled:
         return clusters, evals, {"enabled": False, "moves_tried": 0, "moves_accepted": 0}
 
@@ -178,9 +145,8 @@ def refine_load_balance_by_overlap(
     if K == 0:
         return clusters, evals, {"enabled": True, "moves_tried": 0, "moves_accepted": 0}
 
-    # Config
     rounds = int(cfg.lb_refine.rounds)
-    max_moves_round = int(cfg.lb_refine.max_moves_per_round)     # accepted moves cap per round
+    max_moves_round = int(cfg.lb_refine.max_moves_per_round)
     k_receivers = int(cfg.lb_refine.k_receivers)
     k_users = int(cfg.lb_refine.k_users_from_donor)
     margin_m = float(cfg.lb_refine.intersect_margin_m)
@@ -194,7 +160,6 @@ def refine_load_balance_by_overlap(
 
     rho = float(cfg.ent.rho_safe)
 
-    # Frozen beam geometry from evals
     centers_xy = np.zeros((K, 2), dtype=float)
     centers_ecef = np.zeros((K, 3), dtype=float)
     Rm = np.zeros(K, dtype=float)
@@ -203,18 +168,15 @@ def refine_load_balance_by_overlap(
         centers_ecef[k] = np.asarray(evals[k]["center_ecef_m"], dtype=float).reshape(3)
         Rm[k] = float(evals[k]["R_m"])
 
-    # Beam pointing derived from frozen center_ecef
     v_c = centers_ecef - users.sat_ecef_m[None, :]
     d_center = np.linalg.norm(v_c, axis=1) + 1e-12
     u_c = v_c / d_center[:, None]
     theta_3db = np.arctan(Rm / d_center)
 
-    # Per-user constants
     snr_const_db = _snr_const_db_all(users, cfg)  # (N,)
-    demand = users.demand_mbps     # (N,)
+    demand = users.demand_mbps.astype(float)      # (N,)
     is_ent = (users.qos_w == 4)
 
-    # Initial per-cluster metrics under frozen beams
     U = np.zeros(K, dtype=float)
     risk = np.zeros(K, dtype=float)
     exposed = np.zeros(K, dtype=int)
@@ -248,7 +210,6 @@ def refine_load_balance_by_overlap(
         "objective_after": None,
     }
 
-    # Objective init (for bookkeeping)
     if objective == "var":
         n = float(U.size)
         sumU = float(U.sum())
@@ -258,7 +219,7 @@ def refine_load_balance_by_overlap(
     elif objective == "range":
         sumU = sumU2 = 0.0
         obj_current = float(U.max() - U.min())
-    else:  # "max"
+    else:
         sumU = sumU2 = 0.0
         obj_current = float(U.max())
 
@@ -266,10 +227,9 @@ def refine_load_balance_by_overlap(
 
     rng = np.random.default_rng(int(cfg.run.seed) + 991)
 
-    donor_top_k = min(24, K)  # still small; avoids missing new peaks after some moves
-    max_moves_per_donor = 3   # bounded, improves peak chipping
+    donor_top_k = min(24, K)
+    max_moves_per_donor = 3
 
-    # Peak-aware acceptance tolerances
     max_eps = 1e-12
     peak_drop_tol = 1e-6
 
@@ -278,7 +238,6 @@ def refine_load_balance_by_overlap(
     for _rnd in range(rounds):
         moves_this_round = 0
 
-        # Keep iterating while we can make progress this round
         while moves_this_round < max_moves_round:
             progressed = False
 
@@ -296,7 +255,6 @@ def refine_load_balance_by_overlap(
                     break
 
                 if objective == "max":
-                    # Donors are sorted; once we fall below peak, stop.
                     if float(U[k_from]) < (max1 - 1e-12):
                         break
 
@@ -308,7 +266,6 @@ def refine_load_balance_by_overlap(
                 if neigh.size == 0:
                     continue
 
-                # Receiver shortlist: lowest U among neighbors
                 recv_sorted = neigh[np.argsort(U[neigh])]
                 receivers = recv_sorted[recv_sorted != k_from]
                 if receivers.size == 0:
@@ -323,7 +280,6 @@ def refine_load_balance_by_overlap(
                 if receivers.size == 0:
                     continue
 
-                # Up to a few accepted moves from this donor (chip the peak)
                 for _m in range(max_moves_per_donor):
                     if moves_this_round >= max_moves_round:
                         break
@@ -332,7 +288,6 @@ def refine_load_balance_by_overlap(
                     if S_from.size <= 1:
                         break
 
-                    # Recompute donor shares under frozen donor beam (after deletions)
                     rates_from = _rate_mbps_vec(
                         users.u_sat2user[S_from],
                         u_c[k_from],
@@ -342,7 +297,6 @@ def refine_load_balance_by_overlap(
                     )
                     share_from = demand[S_from] / (rates_from + 1e-9)
 
-                    # Candidate users: largest share first
                     if prefer_non_ent:
                         non_ent_idx = np.where(users.qos_w[S_from] != 4)[0]
                         ent_idx = np.where(users.qos_w[S_from] == 4)[0]
@@ -356,7 +310,6 @@ def refine_load_balance_by_overlap(
                     if order.size == 0:
                         break
 
-                    # Best-first then slight randomness after top few
                     top_det = min(4, int(order.size))
                     order_det = order[:top_det]
                     order_rest = order[top_det:].copy()
@@ -366,7 +319,6 @@ def refine_load_balance_by_overlap(
 
                     accepted = False
 
-                    # Refresh peak stats before trying (only for max objective)
                     if objective == "max":
                         max1 = float(U.max())
                         count_max = int(np.sum(U >= (max1 - 1e-12)))
@@ -380,7 +332,6 @@ def refine_load_balance_by_overlap(
 
                         U_from_new = float(U[k_from] - s_from)
 
-                        # Enterprise donor deltas
                         uid_is_ent = bool(is_ent[uid])
                         if uid_is_ent:
                             dist_from = float(np.linalg.norm(users.xy_m[uid] - centers_xy[k_from]))
@@ -391,7 +342,6 @@ def refine_load_balance_by_overlap(
                             risk_from_delta = 0.0
                             exposed_from_delta = 0
 
-                        # ---- Vectorized receiver screening for this uid ----
                         recv_arr = receivers
                         dxy = centers_xy[recv_arr] - users.xy_m[uid][None, :]
                         dist_to = np.linalg.norm(dxy, axis=1)
@@ -424,7 +374,6 @@ def refine_load_balance_by_overlap(
                         dist_to3 = dist_to2[ok_cap]
                         U_to_new3 = U_to_new[ok_cap]
 
-                        # Best-first receivers: smallest resulting receiver utilization
                         ord_r = np.argsort(U_to_new3)
                         recv_arr3 = recv_arr3[ord_r]
                         dist_to3 = dist_to3[ord_r]
@@ -433,7 +382,6 @@ def refine_load_balance_by_overlap(
                         for k_to, dist_to_val, U_to_new_val in zip(recv_arr3, dist_to3, U_to_new3):
                             stats["moves_tried"] += 1
 
-                            # Enterprise receiver deltas
                             if uid_is_ent:
                                 z_to = float(dist_to_val) / (Rm[int(k_to)] + 1e-9)
                                 risk_to_delta = _enterprise_penalty(z_to, rho)
@@ -442,7 +390,6 @@ def refine_load_balance_by_overlap(
                                 risk_to_delta = 0.0
                                 exposed_to_delta = 0
 
-                            # Guards: risk/exposure (pairwise)
                             before_risk = float(risk[k_from] + risk[int(k_to)])
                             after_risk = float((risk[k_from] + risk_from_delta) + (risk[int(k_to)] + risk_to_delta))
                             if after_risk > before_risk + risk_slack:
@@ -453,7 +400,6 @@ def refine_load_balance_by_overlap(
                             if after_exp > before_exp + exposure_slack:
                                 continue
 
-                            # Objective acceptance
                             if objective == "var":
                                 n = float(U.size)
                                 ui = float(U[k_from]); uj = float(U[int(k_to)])
@@ -478,7 +424,6 @@ def refine_load_balance_by_overlap(
                                     continue
 
                             else:  # "max"
-                                # Never increase the peak
                                 if float(U_to_new_val) > max1 + 1e-9:
                                     continue
 
@@ -487,16 +432,14 @@ def refine_load_balance_by_overlap(
                                     continue
 
                                 if count_max > 1:
-                                    # Reduce peak count: donor drops below max and receiver stays below max
                                     if not ((U_from_new < max1 - peak_drop_tol) and (float(U_to_new_val) < max1 - peak_drop_tol)):
                                         continue
                                 else:
-                                    # Unique peak: must reduce peak value itself
                                     new_peak = max(float(U_to_new_val), float(U_from_new))
                                     if not (new_peak < max1 - peak_drop_tol):
                                         continue
 
-                            # ---- ACCEPT ----
+                            # ACCEPT
                             clusters[k_from] = np.delete(clusters[k_from], int(idx_in_from))
                             clusters[int(k_to)] = np.append(clusters[int(k_to)], int(uid)).astype(int)
 
@@ -525,22 +468,17 @@ def refine_load_balance_by_overlap(
                             moves_this_round += 1
                             accepted = True
                             progressed = True
-                            break  # stop trying receivers for this uid
+                            break
 
                         if accepted:
-                            break  # recompute donor shares after accept
+                            break
 
                     if not accepted:
-                        break  # no move found for this donor
-
-                # end _m loop
-
-            # end donor loop
+                        break
 
             if not progressed:
-                break  # no more improvements this round
+                break
 
-    # Rebuild evals only for changed clusters (others unchanged, safe to reuse)
     evals_out: List[dict] = [dict(ev) for ev in evals]
     for k in np.where(changed)[0]:
         evs = evaluate_cluster(

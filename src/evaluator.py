@@ -125,7 +125,7 @@ def evaluate_cluster(
     d = users.demand_mbps[S]
     s_share = d / (rate_mbps + 1e-9)
     U = float(s_share.sum())
-    cap_ok = (U <= 1.0 + 1e-9)
+    cap_ok = (U <= cfg.payload.W_slots + 1e-9)
 
     # enterprise edge-risk
     rho = float(cfg.ent.rho_safe)

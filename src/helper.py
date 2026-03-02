@@ -102,6 +102,7 @@ def print_config(cfg: Any) -> None:
         "lb_refine",
         "usergen",
         "multisat",
+        "payload",
         "_derived",
     ]
     section_names = [s for s in preferred_order if s in groups]
@@ -315,7 +316,7 @@ def _empty_summary() -> dict[str, Any]:
 def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     """
     Flatten a run record returned by pipeline.run_scenario() into one CSV row.
-    This is now robust (won't crash if an optional key is missing).
+    This is robust (won't crash if an optional key is missing).
     """
     row: dict[str, Any] = {
         "seed": rec["seed"],
@@ -353,11 +354,38 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "time_baseline_tgbp_s": rec.get("time_baseline_tgbp_s", 0.0),
     }
 
-    # Optional multi-sat metadata (if present)
+    # Optional payload metadata (if present)
     for k in [
-        "payload_enabled", "payload_J_lanes", "payload_feasible",
-        "payload_best_m", "payload_n_viol", "payload_T_max", "payload_T_sum",
-        "payload_global_cap", "payload_global_impossible",
+        # payload knobs
+        "payload_enabled",
+        "payload_J_lanes",
+        "payload_W_slots",
+        "payload_Ks_max",
+
+        # payload feasibility + chosen prefix
+        "payload_feasible",
+        "payload_best_m",
+
+        # per-sat caps
+        "payload_T_cap",
+        "payload_K_cap",
+
+        # violation diagnostics
+        "payload_n_viol_T",
+        "payload_n_viol_K",
+        "payload_T_over_sum",
+        "payload_K_over_sum",
+        "payload_T_over_max",
+        "payload_K_over_max",
+
+        "payload_T_sum",
+        "payload_T_max",
+        "payload_K_sum",
+        "payload_K_max",
+        "payload_W_min_req",
+
+        "payload_global_cap",
+        "payload_global_impossible",
     ]:
         if k in rec:
             row[k] = rec[k]
@@ -381,7 +409,6 @@ def write_csv(path: str, rows: list[dict[str, Any]]):
     if not rows:
         return
 
-    # Union of all keys -> stable even if some runs have extra fields
     fieldset = set()
     for r in rows:
         fieldset.update(r.keys())

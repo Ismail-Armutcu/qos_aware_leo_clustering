@@ -139,17 +139,29 @@ def _payload_repair_inner(
     prof: Profiler,
 ) -> tuple[bool, List[np.ndarray], dict[int, tuple[Any, list[np.ndarray], list[dict]]], dict]:
     """
-    Try to satisfy per-satellite payload time budget:
-        T_s = sum_b U_{s,b} <= J_lanes
+    Payload feasibility model (snapshot):
 
-    Repair operator:
-        Move the single highest-U beam (cluster) from an overloaded sat to a receiver sat
-        where ALL users are visible and receiver has slack.
+    Per-satellite time budget over a beam-hopping window:
+        T_s = sum_b U_{s,b} <= J_lanes * W_slots
+
+    Per-satellite beam count cap (distinct beams / digital beams / beam codebook size):
+        K_s = |B_s| <= Ks_max
+
+    Repair operator (cluster-level offloads):
+        Move one whole beam (cluster) from an overloaded satellite to another satellite
+        that can see all those users and has slack in BOTH time and beam-count.
     """
+    import math
+
     ms = cfg.multisat
     pcfg = cfg.payload
 
     J = float(pcfg.J_lanes)
+    W = int(pcfg.W_slots)
+    K_cap = int(pcfg.Ks_max)
+
+    T_cap = J * float(W)
+
     emin = float(ms.elev_mask_deg)
     tol = 1e-9
 
@@ -159,51 +171,103 @@ def _payload_repair_inner(
     users_sat_cache: List[Any | None] = [None] * S
     clusters_cache: List[list[np.ndarray] | None] = [None] * S
     evals_cache: List[list[dict] | None] = [None] * S
+
     T_cache = np.zeros(S, dtype=float)
+    K_cache = np.zeros(S, dtype=int)
 
     main_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]] = {}
+
+    def recompute_stats_dict(moves_tried: int, moves_accepted: int, rounds_used: int) -> dict:
+        over_T = np.maximum(0.0, T_cache - T_cap)
+        over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
+
+        n_viol_T = int(np.sum(over_T > tol))
+        n_viol_K = int(np.sum(over_K > tol))
+
+        T_sum = float(np.sum(T_cache))
+        T_max = float(np.max(T_cache)) if S > 0 else 0.0
+        K_sum = int(np.sum(K_cache))
+        K_max = int(np.max(K_cache)) if S > 0 else 0
+
+        W_min_req = int(math.ceil(T_max / max(J, 1e-12))) if S > 0 else 0
+
+        global_cap = float(S) * T_cap
+        global_impossible = bool(T_sum > global_cap + 1e-6)
+
+        feasible = (n_viol_T == 0) and (n_viol_K == 0)
+
+        return {
+            "enabled": True,
+            "J_lanes": J,
+            "W_slots": W,
+            "Ks_max": K_cap,
+            "T_cap": float(T_cap),
+            "K_cap": int(K_cap),
+
+            "rounds": int(rounds_used),
+            "moves_tried": int(moves_tried),
+            "moves_accepted": int(moves_accepted),
+
+            "feasible": bool(feasible),
+
+            "n_viol_T": int(n_viol_T),
+            "n_viol_K": int(n_viol_K),
+
+            "T_over_sum": float(np.sum(over_T)),
+            "K_over_sum": float(np.sum(over_K)),
+
+            "T_over_max": float(np.max(over_T)) if S > 0 else 0.0,
+            "K_over_max": float(np.max(over_K)) if S > 0 else 0.0,
+
+            "T_sum": float(T_sum),
+            "T_max": float(T_max),
+            "K_sum": int(K_sum),
+            "K_max": int(K_max),
+
+            "W_min_req": int(W_min_req),
+
+            "global_cap": float(global_cap),
+            "global_impossible": bool(global_impossible),
+        }
+
+    def violation_key() -> tuple:
+        over_T = np.maximum(0.0, T_cache - T_cap)
+        over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
+        n_viol = int(np.sum(over_T > tol) + np.sum(over_K > tol))
+        over_sum = float(np.sum(over_T) + np.sum(over_K))
+        worst = float(max(np.max(over_T) if S > 0 else 0.0, np.max(over_K) if S > 0 else 0.0))
+        return (n_viol, over_sum, worst)
 
     # Build initial per-sat clustering
     for s in range(S):
         u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-        users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, T
+        users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
+        K_cache[s] = int(len(c)) if c is not None else 0
+
         if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
             main_by_sat[s] = (u, c, e)
 
-    T_sum = float(T_cache.sum())
-    global_cap = float(S) * J
-    global_impossible = (T_sum > global_cap + 1e-6)
+    # Global time lower bound check (for this fixed S, J, W). If violated, repair cannot help.
+    stats0 = recompute_stats_dict(moves_tried=0, moves_accepted=0, rounds_used=0)
+    if stats0["global_impossible"]:
+        return False, sat_user_ids, main_by_sat, stats0
 
-    stats = {
-        "enabled": True,
-        "J_lanes": J,
-        "rounds": 0,
-        "moves": 0,
-        "feasible": False,
-        "n_viol": int(np.sum(T_cache > (J + tol))),
-        "T_max": float(T_cache.max()) if S > 0 else 0.0,
-        "T_sum": float(T_sum),
-        "global_cap": float(global_cap),
-        "global_impossible": bool(global_impossible),
-    }
+    moves_tried = 0
+    moves_accepted = 0
+    rounds_used = 0
 
-    # If globally impossible, repairs cannot help. Return immediately.
-    if global_impossible:
-        return False, sat_user_ids, main_by_sat, stats
-
-    # Repair rounds
     for rnd in range(int(pcfg.max_rounds)):
-        stats["rounds"] = rnd + 1
+        rounds_used = rnd + 1
 
-        viol = np.where(T_cache > (J + tol))[0]
+        over_T = np.maximum(0.0, T_cache - T_cap)
+        over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
+
+        viol = np.where((over_T > tol) | (over_K > tol))[0]
         if viol.size == 0:
-            stats["feasible"] = True
-            stats["n_viol"] = 0
             break
 
-        # Process violators in descending overload
-        overload = T_cache[viol] - J
-        viol = viol[np.argsort(-overload)]
+        severity = 1000.0 * over_K[viol] + over_T[viol]
+        viol = viol[np.argsort(-severity)]
 
         moved_this_round = 0
 
@@ -216,8 +280,15 @@ def _payload_repair_inner(
             if clusters_d is None or evals_d is None or len(clusters_d) == 0:
                 continue
 
+            sizes = np.array([int(len(Sb)) for Sb in clusters_d], dtype=int)
             U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
-            k_beam = int(np.argmax(U_beams))
+
+            if K_cache[s_donor] > K_cap:
+                order = np.lexsort((-U_beams, sizes))  # sizes asc, U desc
+                k_beam = int(order[0])
+            else:
+                k_beam = int(np.argmax(U_beams))
+
             if not np.isfinite(U_beams[k_beam]) or U_beams[k_beam] <= 0.0:
                 continue
 
@@ -233,17 +304,19 @@ def _payload_repair_inner(
                 if t == s_donor:
                     continue
 
-                # receiver slack
-                slack = J - float(T_cache[t])
-                if slack <= 0.0:
+                if K_cache[t] >= K_cap:
+                    continue
+
+                slack_T = T_cap - float(T_cache[t])
+                if slack_T <= 0.0:
                     continue
 
                 elev = _elev_deg_users_to_sat(users_raw.ecef_m[donor_global], sat_ecef_m[t])
                 if np.any(elev < emin):
                     continue
 
-                # prioritize slack; tie-break by mean elevation
-                score = float(slack) + 0.01 * float(np.mean(elev))
+                slack_K = float(K_cap - int(K_cache[t]))
+                score = 10.0 * slack_K + 1.0 * slack_T + 0.01 * float(np.mean(elev))
                 if score > best_score:
                     best_score = score
                     best_t = t
@@ -251,34 +324,66 @@ def _payload_repair_inner(
             if best_t < 0:
                 continue
 
-            donor_set = sat_user_ids[s_donor]
-            moved_flags = np.isin(donor_set, donor_global, assume_unique=False)
-            new_donor = donor_set[~moved_flags]
-            new_recv = np.concatenate([sat_user_ids[best_t], donor_global], axis=0).astype(int, copy=False)
+            donor_old = sat_user_ids[s_donor].copy()
+            recv_old = sat_user_ids[best_t].copy()
 
-            sat_user_ids[s_donor] = new_donor
-            sat_user_ids[best_t] = new_recv
+            key_before = violation_key()
 
-            # rebuild donor + receiver only
+            moved_flags = np.isin(donor_old, donor_global, assume_unique=False)
+            sat_user_ids[s_donor] = donor_old[~moved_flags]
+            sat_user_ids[best_t] = np.concatenate([recv_old, donor_global], axis=0).astype(int, copy=False)
+
+            moves_tried += 1
+
+            ok_rebuild = True
             for s in (s_donor, best_t):
-                u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-                users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, T
+                try:
+                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
+                except Exception:
+                    ok_rebuild = False
+                    break
+                users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
+                K_cache[s] = int(len(c)) if c is not None else 0
+
                 if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
                     main_by_sat[s] = (u, c, e)
                 else:
                     main_by_sat.pop(s, None)
 
-            stats["moves"] += 1
-            moved_this_round += 1
+            if not ok_rebuild:
+                sat_user_ids[s_donor] = donor_old
+                sat_user_ids[best_t] = recv_old
+                for s in (s_donor, best_t):
+                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
+                    users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
+                    K_cache[s] = int(len(c)) if c is not None else 0
+                    if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
+                        main_by_sat[s] = (u, c, e)
+                    else:
+                        main_by_sat.pop(s, None)
+                continue
+
+            key_after = violation_key()
+
+            if key_after < key_before:
+                moves_accepted += 1
+                moved_this_round += 1
+            else:
+                sat_user_ids[s_donor] = donor_old
+                sat_user_ids[best_t] = recv_old
+                for s in (s_donor, best_t):
+                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
+                    users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
+                    K_cache[s] = int(len(c)) if c is not None else 0
+                    if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
+                        main_by_sat[s] = (u, c, e)
+                    else:
+                        main_by_sat.pop(s, None)
 
         if moved_this_round == 0:
             break
 
-    stats["n_viol"] = int(np.sum(T_cache > (J + tol)))
-    stats["T_max"] = float(T_cache.max()) if S > 0 else 0.0
-    stats["T_sum"] = float(T_cache.sum())
-    stats["feasible"] = (stats["n_viol"] == 0)
-
+    stats = recompute_stats_dict(moves_tried=moves_tried, moves_accepted=moves_accepted, rounds_used=rounds_used)
     return bool(stats["feasible"]), sat_user_ids, main_by_sat, stats
 
 
@@ -350,14 +455,13 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         sat_user_ids_init = [np.asarray(x, dtype=int) for x in assoc.sat_user_ids]
 
         if not pcfg.enabled:
-            # build main_by_sat once
             main_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]] = {}
             for s in range(m):
                 u, c, e, _T = _build_sat_piece(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof)
                 if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
                     main_by_sat[s] = (u, c, e)
             feasible = True
-            payload_stats = {"enabled": False, "feasible": True, "n_viol": 0, "T_max": 0.0, "T_sum": 0.0}
+            payload_stats = {"enabled": False, "feasible": True}
             sat_user_ids_out = sat_user_ids_init
         else:
             feasible, sat_user_ids_out, main_by_sat, payload_stats = _payload_repair_inner(
@@ -381,36 +485,44 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             best_feasible = cand
             break
 
-        # keep best failed (fewest viol, then smallest Tmax, then smaller m)
         if best_failed is None:
             best_failed = cand
         else:
             a = best_failed.payload_stats
             b = cand.payload_stats
-            key_a = (int(a.get("n_viol", 10**9)), float(a.get("T_max", 1e99)), int(best_failed.m))
-            key_b = (int(b.get("n_viol", 10**9)), float(b.get("T_max", 1e99)), int(cand.m))
+            key_a = (
+                1 if bool(a.get("global_impossible", False)) else 0,
+                int(a.get("n_viol_T", 0)) + int(a.get("n_viol_K", 0)),
+                float(a.get("T_over_sum", 0.0)) + float(a.get("K_over_sum", 0.0)),
+                float(max(float(a.get("T_over_max", 0.0)), float(a.get("K_over_max", 0.0)))),
+                int(best_failed.m),
+            )
+            key_b = (
+                1 if bool(b.get("global_impossible", False)) else 0,
+                int(b.get("n_viol_T", 0)) + int(b.get("n_viol_K", 0)),
+                float(b.get("T_over_sum", 0.0)) + float(b.get("K_over_sum", 0.0)),
+                float(max(float(b.get("T_over_max", 0.0)), float(b.get("K_over_max", 0.0)))),
+                int(cand.m),
+            )
             if key_b < key_a:
                 best_failed = cand
 
     chosen = best_feasible if best_feasible is not None else best_failed
     if chosen is None:
-        # Should never happen, but keep sweep safe
         chosen = _Candidate(
             m=max_prefix,
             assoc=type("X", (), {"n_unserved": users_raw.n, "n_moves": 0})(),
             sat_user_ids=[np.array([], dtype=int) for _ in range(max_prefix)],
             main_by_sat={},
-            payload_stats={"enabled": pcfg.enabled, "feasible": False, "n_viol": max_prefix, "T_max": np.nan, "T_sum": np.nan},
+            payload_stats={"enabled": bool(pcfg.enabled), "feasible": False},
             feasible=False,
         )
 
     payload_feasible = bool(chosen.feasible)
     m_used = int(chosen.m)
 
-    # Build pieces_main from chosen main_by_sat
     pieces_main: list[tuple[Any, list[np.ndarray], list[dict]]] = [chosen.main_by_sat[s] for s in sorted(chosen.main_by_sat.keys())]
 
-    # If payload infeasible -> return early (skip refinements/baselines to keep Phase B alive)
     if not payload_feasible:
         main_summary = summarize_multisat(pieces_main, cfg) if pieces_main else _empty_summary()
 
@@ -430,7 +542,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "bandwidth_hz": cfg.phy.bandwidth_hz,
             "radius_modes_km": cfg.beam.radius_modes_km,
 
-            # Multi-sat metadata
             "ms_tle_path": ms.tle_path,
             "ms_time_utc": t0_utc.isoformat(),
             "ms_elev_mask_deg": ms.elev_mask_deg,
@@ -441,15 +552,31 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             # Payload metadata
             "payload_enabled": bool(pcfg.enabled),
             "payload_J_lanes": float(pcfg.J_lanes),
+            "payload_W_slots": int(pcfg.W_slots),
+            "payload_Ks_max": int(pcfg.Ks_max),
+
             "payload_feasible": False,
             "payload_best_m": int(m_used),
-            "payload_n_viol": int(chosen.payload_stats.get("n_viol", 0)),
-            "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
+
+            "payload_T_cap": float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
+            "payload_K_cap": int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
+
+            "payload_n_viol_T": int(chosen.payload_stats.get("n_viol_T", 0)),
+            "payload_n_viol_K": int(chosen.payload_stats.get("n_viol_K", 0)),
+            "payload_T_over_sum": float(chosen.payload_stats.get("T_over_sum", 0.0)),
+            "payload_K_over_sum": float(chosen.payload_stats.get("K_over_sum", 0.0)),
+            "payload_T_over_max": float(chosen.payload_stats.get("T_over_max", 0.0)),
+            "payload_K_over_max": float(chosen.payload_stats.get("K_over_max", 0.0)),
+
             "payload_T_sum": float(chosen.payload_stats.get("T_sum", 0.0)),
-            "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes))),
+            "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
+            "payload_K_sum": int(chosen.payload_stats.get("K_sum", 0)),
+            "payload_K_max": int(chosen.payload_stats.get("K_max", 0)),
+            "payload_W_min_req": int(chosen.payload_stats.get("W_min_req", 0)),
+
+            "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes) * float(pcfg.W_slots))),
             "payload_global_impossible": bool(chosen.payload_stats.get("global_impossible", False)),
 
-            # Summaries
             "main": main_summary,
             "main_ref": _empty_summary(),
             "main_ref_lb": _empty_summary(),
@@ -462,7 +589,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "tgbp_fixed": _empty_summary(),
             "tgbp_rep": _empty_summary(),
 
-            # Timings
             "time_usergen_s": prof.t.get("usergen", 0.0),
             "time_sat_select_s": prof.t.get("sat_select", 0.0),
             "time_assoc_s": prof.t.get("assoc", 0.0),
@@ -505,12 +631,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     busiest_clusters_ref = busiest_evals_ref = None
     busiest_clusters_lb = busiest_evals_lb = None
 
-    # determine busiest sat (by users)
     sizes = [len(x) for x in chosen.sat_user_ids]
     if sizes:
         busiest_sat_idx = int(np.argmax(sizes))
 
-    # process each sat in chosen set
     sat_ecef_m = sat_ecef_full[:m_used].copy()
     for s_idx in range(m_used):
         user_ids = chosen.sat_user_ids[s_idx]
@@ -521,15 +645,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         if users_sat.n == 0:
             continue
 
-        # main (rebuild once to keep consistent)
         prof.tic("split")
         clusters, evals = split_to_feasible(users_sat, cfg, prof=prof)
         prof.toc("split")
-        # main pieces already exist; but keep consistent for refinements/baselines
-        # (optional: could reuse chosen.main_by_sat)
-        # pieces_main will be recomputed for summary below, so keep local only.
 
-        # QoS refine
         prof.tic("ent_ref")
         clusters_ref, evals_ref, ref_stats = refine_enterprise_by_angle(
             users_sat, cfg, clusters, evals,
@@ -542,7 +661,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         prof.c["ent_moves_accepted"] = prof.c.get("ent_moves_accepted", 0) + int(ref_stats.get("moves_accepted", 0))
         pieces_ref.append((users_sat, clusters_ref, evals_ref))
 
-        # LB refine
         prof.tic("lb_ref")
         clusters_lb, evals_lb, lb_stats = refine_load_balance_by_overlap(users_sat, cfg, clusters_ref, evals_ref)
         prof.toc("lb_ref")
@@ -550,7 +668,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         prof.c["lb_moves_accepted"] = prof.c.get("lb_moves_accepted", 0) + int(lb_stats.get("moves_accepted", 0))
         pieces_lb.append((users_sat, clusters_lb, evals_lb))
 
-        # Baselines use fixed K_ref = |clusters|
         K_ref = len(clusters)
 
         prof.tic("baseline_without_qos")
@@ -584,7 +701,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             busiest_clusters_ref, busiest_evals_ref = clusters_ref, evals_ref
             busiest_clusters_lb, busiest_evals_lb = clusters_lb, evals_lb
 
-    # main summary from chosen solution
     main_summary = summarize_multisat(pieces_main, cfg) if pieces_main else _empty_summary()
     ref_summary = summarize_multisat(pieces_ref, cfg) if pieces_ref else _empty_summary()
     lb_summary = summarize_multisat(pieces_lb, cfg) if pieces_lb else _empty_summary()
@@ -661,12 +777,29 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
         "payload_enabled": bool(pcfg.enabled),
         "payload_J_lanes": float(pcfg.J_lanes),
+        "payload_W_slots": int(pcfg.W_slots),
+        "payload_Ks_max": int(pcfg.Ks_max),
+
         "payload_feasible": True,
         "payload_best_m": int(m_used),
-        "payload_n_viol": int(chosen.payload_stats.get("n_viol", 0)),
-        "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
+
+        "payload_T_cap": float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
+        "payload_K_cap": int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
+
+        "payload_n_viol_T": int(chosen.payload_stats.get("n_viol_T", 0)),
+        "payload_n_viol_K": int(chosen.payload_stats.get("n_viol_K", 0)),
+        "payload_T_over_sum": float(chosen.payload_stats.get("T_over_sum", 0.0)),
+        "payload_K_over_sum": float(chosen.payload_stats.get("K_over_sum", 0.0)),
+        "payload_T_over_max": float(chosen.payload_stats.get("T_over_max", 0.0)),
+        "payload_K_over_max": float(chosen.payload_stats.get("K_over_max", 0.0)),
+
         "payload_T_sum": float(chosen.payload_stats.get("T_sum", 0.0)),
-        "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes))),
+        "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
+        "payload_K_sum": int(chosen.payload_stats.get("K_sum", 0)),
+        "payload_K_max": int(chosen.payload_stats.get("K_max", 0)),
+        "payload_W_min_req": int(chosen.payload_stats.get("W_min_req", 0)),
+
+        "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes) * float(pcfg.W_slots))),
         "payload_global_impossible": bool(chosen.payload_stats.get("global_impossible", False)),
 
         "main": main_summary,

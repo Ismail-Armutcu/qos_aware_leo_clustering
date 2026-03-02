@@ -53,7 +53,7 @@ class TrafficConfig:
     # QoS distribution (eco/std/ent)
     qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)
 
-    # NEW (you said you already added it): demand conditional on QoS
+    # demand conditional on QoS
     # Multipliers applied to demand_mbps_median for (eco, std, ent)
     demand_median_mult_by_qos: Tuple[float, float, float] = (0.7, 1.0, 2.0)
 
@@ -125,15 +125,20 @@ class MultiSatConfig:
 
 
 # -----------------------------
-# NEW: Payload feasibility config
+# Payload feasibility config (UPDATED)
 # -----------------------------
 @dataclass(frozen=True)
 class PayloadConfig:
     enabled: bool = True
 
-    # Satellite beam-hopping time lanes:
-    # constraint per satellite: sum_b U_{s,b} <= J_lanes
+    # Beam-hopping / scheduling window model:
+    #   per-sat time feasibility: sum_b U_{s,b} <= J_lanes * W_slots
     J_lanes: float = 16.0
+    W_slots: int = 8
+
+    # Per-satellite beam count cap:
+    #   per-sat beam feasibility: K_s <= Ks_max
+    Ks_max: int = 256
 
     # Inner repair loop limits (cluster-level offloads)
     max_rounds: int = 8

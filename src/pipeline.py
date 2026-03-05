@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, List, Tuple
+from typing import Any, Optional, List
 
 import numpy as np
 
@@ -13,7 +13,7 @@ from src.baselines.weighted_kmeans import run_weighted_kmeans_baseline
 from src.baselines.fast_beam_placement import run_bkmeans_baseline, run_tgbp_baseline
 from src.evaluator import evaluate_cluster
 from src.helper import summarize_multisat, print_summary, print_config
-from src.plot import plot_clusters_overlay
+from src.plot import plot_clusters_overlay, plot_payload_sat_stats
 from src.refine_qos_angle import refine_enterprise_by_angle
 from src.refine_load_balance import refine_load_balance_by_overlap
 from src.split import split_farthest
@@ -139,17 +139,15 @@ def _payload_repair_inner(
     prof: Profiler,
 ) -> tuple[bool, List[np.ndarray], dict[int, tuple[Any, list[np.ndarray], list[dict]]], dict]:
     """
-    Payload feasibility model (snapshot):
+    Payload feasibility with:
+      - KsMax-first repair pass (offload small/low-U beams first)
+      - Time-cap repair pass (offload high-U beams from worst satellite)
+      - Optional smoothing (reduce W_min_req if feasible but tight)
 
-    Per-satellite time budget over a beam-hopping window:
-        T_s = sum_b U_{s,b} <= J_lanes * W_slots
-
-    Per-satellite beam count cap (distinct beams / digital beams / beam codebook size):
-        K_s = |B_s| <= Ks_max
-
-    Repair operator (cluster-level offloads):
-        Move one whole beam (cluster) from an overloaded satellite to another satellite
-        that can see all those users and has slack in BOTH time and beam-count.
+    IMPORTANT FIX:
+      After any accepted move, cached clusters become stale (sat_user_ids ordering changed).
+      Therefore, donor selection ALWAYS re-fetches clusters_cache/evals_cache before the next move.
+      Additionally, _try_move rejects any stale beam index array.
     """
     import math
 
@@ -159,8 +157,7 @@ def _payload_repair_inner(
     J = float(pcfg.J_lanes)
     W = int(pcfg.W_slots)
     K_cap = int(pcfg.Ks_max)
-
-    T_cap = J * float(W)
+    T_cap = float(J * float(W))
 
     emin = float(ms.elev_mask_deg)
     tol = 1e-9
@@ -168,7 +165,6 @@ def _payload_repair_inner(
     S = int(sat_ecef_m.shape[0])
     sat_user_ids: List[np.ndarray] = [np.asarray(x, dtype=int).copy() for x in sat_user_ids_init]
 
-    users_sat_cache: List[Any | None] = [None] * S
     clusters_cache: List[list[np.ndarray] | None] = [None] * S
     evals_cache: List[list[dict] | None] = [None] * S
 
@@ -177,214 +173,327 @@ def _payload_repair_inner(
 
     main_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]] = {}
 
-    def recompute_stats_dict(moves_tried: int, moves_accepted: int, rounds_used: int) -> dict:
-        over_T = np.maximum(0.0, T_cache - T_cap)
-        over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
+    def w_min_req_from_Tmax(T_max: float) -> int:
+        return int(math.ceil(float(T_max) / max(J, 1e-12)))
 
-        n_viol_T = int(np.sum(over_T > tol))
-        n_viol_K = int(np.sum(over_K > tol))
+    def rebuild_sat(s: int) -> bool:
+        try:
+            u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
+        except Exception:
+            return False
+        clusters_cache[s] = c
+        evals_cache[s] = e
+        T_cache[s] = float(T)
+        K_cache[s] = int(len(c)) if c is not None else 0
+        if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
+            main_by_sat[s] = (u, c, e)
+        else:
+            main_by_sat.pop(s, None)
+        return True
 
-        T_sum = float(np.sum(T_cache))
-        T_max = float(np.max(T_cache)) if S > 0 else 0.0
-        K_sum = int(np.sum(K_cache))
-        K_max = int(np.max(K_cache)) if S > 0 else 0
+    for s in range(S):
+        rebuild_sat(s)
 
-        W_min_req = int(math.ceil(T_max / max(J, 1e-12))) if S > 0 else 0
-
-        global_cap = float(S) * T_cap
-        global_impossible = bool(T_sum > global_cap + 1e-6)
-
-        feasible = (n_viol_T == 0) and (n_viol_K == 0)
-
-        return {
+    # Global time bound (for fixed S, J, W)
+    T_sum = float(np.sum(T_cache))
+    global_cap = float(S) * T_cap
+    if T_sum > global_cap + 1e-6:
+        stats = {
             "enabled": True,
             "J_lanes": J,
             "W_slots": W,
             "Ks_max": K_cap,
-            "T_cap": float(T_cap),
-            "K_cap": int(K_cap),
-
-            "rounds": int(rounds_used),
-            "moves_tried": int(moves_tried),
-            "moves_accepted": int(moves_accepted),
-
-            "feasible": bool(feasible),
-
-            "n_viol_T": int(n_viol_T),
-            "n_viol_K": int(n_viol_K),
-
-            "T_over_sum": float(np.sum(over_T)),
-            "K_over_sum": float(np.sum(over_K)),
-
-            "T_over_max": float(np.max(over_T)) if S > 0 else 0.0,
-            "K_over_max": float(np.max(over_K)) if S > 0 else 0.0,
-
+            "T_cap": T_cap,
+            "K_cap": K_cap,
+            "rounds": 0,
+            "moves_tried": 0,
+            "moves_accepted": 0,
+            "moves_tried_K": 0,
+            "moves_accepted_K": 0,
+            "moves_tried_T": 0,
+            "moves_accepted_T": 0,
+            "moves_tried_smooth": 0,
+            "moves_accepted_smooth": 0,
+            "feasible": False,
+            "n_viol_T": int(np.sum((T_cache - T_cap) > tol)),
+            "n_viol_K": int(np.sum((K_cache - K_cap) > tol)),
+            "T_over_sum": float(np.sum(np.maximum(0.0, T_cache - T_cap))),
+            "K_over_sum": float(np.sum(np.maximum(0.0, K_cache.astype(float) - float(K_cap)))),
+            "T_over_max": float(np.max(np.maximum(0.0, T_cache - T_cap))) if S else 0.0,
+            "K_over_max": float(np.max(np.maximum(0.0, K_cache.astype(float) - float(K_cap)))) if S else 0.0,
             "T_sum": float(T_sum),
-            "T_max": float(T_max),
-            "K_sum": int(K_sum),
-            "K_max": int(K_max),
-
-            "W_min_req": int(W_min_req),
-
+            "T_max": float(np.max(T_cache)) if S else 0.0,
+            "K_sum": int(np.sum(K_cache)),
+            "K_max": int(np.max(K_cache)) if S else 0,
+            "W_min_req": int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0)),
             "global_cap": float(global_cap),
-            "global_impossible": bool(global_impossible),
+            "global_impossible": True,
+            "T_by_sat": T_cache.copy(),
+            "K_by_sat": K_cache.copy(),
         }
+        return False, sat_user_ids, main_by_sat, stats
 
-    def violation_key() -> tuple:
-        over_T = np.maximum(0.0, T_cache - T_cap)
+    def state_key() -> tuple:
         over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
-        n_viol = int(np.sum(over_T > tol) + np.sum(over_K > tol))
-        over_sum = float(np.sum(over_T) + np.sum(over_K))
-        worst = float(max(np.max(over_T) if S > 0 else 0.0, np.max(over_K) if S > 0 else 0.0))
-        return (n_viol, over_sum, worst)
+        over_T = np.maximum(0.0, T_cache - T_cap)
+        nK = int(np.sum(over_K > tol))
+        nT = int(np.sum(over_T > tol))
+        Ksum = float(np.sum(over_K))
+        Tsum = float(np.sum(over_T))
+        Kmax = float(np.max(over_K)) if S else 0.0
+        Tmax = float(np.max(over_T)) if S else 0.0
+        Wreq = int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0))
+        Wgap = int(max(0, Wreq - W))
+        return (nK, Ksum, Kmax, nT, Wgap, Tsum, Tmax)
 
-    # Build initial per-sat clustering
-    for s in range(S):
-        u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-        users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
-        K_cache[s] = int(len(c)) if c is not None else 0
+    def choose_receiver(donor_global: np.ndarray, s_donor: int, mode: str) -> int:
+        best_t = -1
+        best_score = -1e99
+        for t in range(S):
+            if t == s_donor:
+                continue
+            if K_cache[t] >= K_cap:
+                continue
+            slack_T = float(T_cap - T_cache[t])
+            if slack_T <= 0.0:
+                continue
+            elev = _elev_deg_users_to_sat(users_raw.ecef_m[donor_global], sat_ecef_m[t])
+            if np.any(elev < emin):
+                continue
+            slack_K = float(K_cap - int(K_cache[t]))
+            if mode == "K":
+                score = 100.0 * slack_K + 1.0 * slack_T + 0.05 * float(np.mean(elev))
+            elif mode == "T":
+                score = 100.0 * slack_T + 5.0 * slack_K + 0.05 * float(np.mean(elev))
+            else:
+                score = 100.0 * slack_T + 10.0 * slack_K + 0.05 * float(np.mean(elev))
+            if score > best_score:
+                best_score = score
+                best_t = int(t)
+        return int(best_t)
 
-        if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
-            main_by_sat[s] = (u, c, e)
+    moves_tried = moves_accepted = 0
+    moves_tried_K = moves_accepted_K = 0
+    moves_tried_T = moves_accepted_T = 0
+    moves_tried_smooth = moves_accepted_smooth = 0
 
-    # Global time lower bound check (for this fixed S, J, W). If violated, repair cannot help.
-    stats0 = recompute_stats_dict(moves_tried=0, moves_accepted=0, rounds_used=0)
-    if stats0["global_impossible"]:
-        return False, sat_user_ids, main_by_sat, stats0
+    def try_move(s_donor: int, beam_local_ids: np.ndarray, mode: str, accept_predicate=None) -> bool:
+        nonlocal moves_tried, moves_accepted, moves_tried_K, moves_accepted_K, moves_tried_T, moves_accepted_T, moves_tried_smooth, moves_accepted_smooth
 
-    moves_tried = 0
-    moves_accepted = 0
+        if beam_local_ids.size == 0:
+            return False
+
+        # SAFETY: reject stale beam indices
+        nloc = int(sat_user_ids[s_donor].size)
+        if np.any(beam_local_ids < 0) or np.any(beam_local_ids >= nloc):
+            return False
+
+        donor_global = sat_user_ids[s_donor][beam_local_ids]
+        if donor_global.size == 0:
+            return False
+
+        s_recv = choose_receiver(donor_global, s_donor, mode=mode)
+        if s_recv < 0:
+            return False
+
+        donor_old = sat_user_ids[s_donor].copy()
+        recv_old = sat_user_ids[s_recv].copy()
+
+        key_before = state_key()
+        Tmax_before = float(np.max(T_cache)) if S else 0.0
+        Wreq_before = w_min_req_from_Tmax(Tmax_before)
+
+        moved_flags = np.isin(donor_old, donor_global, assume_unique=False)
+        sat_user_ids[s_donor] = donor_old[~moved_flags]
+        sat_user_ids[s_recv] = np.concatenate([recv_old, donor_global], axis=0).astype(int, copy=False)
+
+        moves_tried += 1
+        if mode == "K":
+            moves_tried_K += 1
+        elif mode == "T":
+            moves_tried_T += 1
+        else:
+            moves_tried_smooth += 1
+
+        ok1 = rebuild_sat(s_donor)
+        ok2 = rebuild_sat(s_recv)
+        if not (ok1 and ok2):
+            sat_user_ids[s_donor] = donor_old
+            sat_user_ids[s_recv] = recv_old
+            rebuild_sat(s_donor)
+            rebuild_sat(s_recv)
+            return False
+
+        key_after = state_key()
+        Tmax_after = float(np.max(T_cache)) if S else 0.0
+        Wreq_after = w_min_req_from_Tmax(Tmax_after)
+
+        if accept_predicate is None:
+            accept = (key_after < key_before)
+        else:
+            try:
+                accept = bool(accept_predicate(key_before, key_after, Wreq_before, Wreq_after))
+            except Exception:
+                accept = False
+
+        if accept:
+            moves_accepted += 1
+            if mode == "K":
+                moves_accepted_K += 1
+            elif mode == "T":
+                moves_accepted_T += 1
+            else:
+                moves_accepted_smooth += 1
+            return True
+
+        # rollback
+        sat_user_ids[s_donor] = donor_old
+        sat_user_ids[s_recv] = recv_old
+        rebuild_sat(s_donor)
+        rebuild_sat(s_recv)
+        return False
+
     rounds_used = 0
 
     for rnd in range(int(pcfg.max_rounds)):
         rounds_used = rnd + 1
-
-        over_T = np.maximum(0.0, T_cache - T_cap)
-        over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
-
-        viol = np.where((over_T > tol) | (over_K > tol))[0]
-        if viol.size == 0:
-            break
-
-        severity = 1000.0 * over_K[viol] + over_T[viol]
-        viol = viol[np.argsort(-severity)]
-
         moved_this_round = 0
 
-        for s_donor in viol.tolist():
-            if moved_this_round >= int(pcfg.max_offloads_per_round):
-                break
+        # PASS 1: KsMax-first
+        donorsK = np.where(K_cache.astype(float) > float(K_cap) + tol)[0]
+        if donorsK.size > 0:
+            donorsK = donorsK[np.argsort(-(K_cache[donorsK] - K_cap), kind="mergesort")]
+            for s_donor in donorsK.tolist():
+                while (K_cache[s_donor] > K_cap + tol) and (moved_this_round < int(pcfg.max_offloads_per_round)):
+                    clusters_d = clusters_cache[s_donor]
+                    evals_d = evals_cache[s_donor]
+                    if clusters_d is None or evals_d is None or len(clusters_d) == 0:
+                        break
 
-            clusters_d = clusters_cache[s_donor]
-            evals_d = evals_cache[s_donor]
-            if clusters_d is None or evals_d is None or len(clusters_d) == 0:
-                continue
+                    sizes = np.array([int(len(Sb)) for Sb in clusters_d], dtype=int)
+                    U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
 
-            sizes = np.array([int(len(Sb)) for Sb in clusters_d], dtype=int)
-            U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
+                    order = np.lexsort((U_beams, sizes))  # small size, then low-U
+                    moved = False
+                    for k_beam in order[: min(8, order.size)]:
+                        donor_local = np.asarray(clusters_d[int(k_beam)], dtype=int)
+                        if donor_local.size == 0:
+                            continue
+                        if try_move(s_donor, donor_local, mode="K"):
+                            moved_this_round += 1
+                            moved = True
+                            break
+                    if not moved:
+                        break
 
-            if K_cache[s_donor] > K_cap:
-                order = np.lexsort((-U_beams, sizes))  # sizes asc, U desc
-                k_beam = int(order[0])
-            else:
-                k_beam = int(np.argmax(U_beams))
+        # PASS 2: Time-cap repair
+        overT = np.maximum(0.0, T_cache - T_cap)
+        donorsT = np.where(overT > tol)[0]
+        if donorsT.size > 0 and moved_this_round < int(pcfg.max_offloads_per_round):
+            donorsT = donorsT[np.argsort(-overT[donorsT], kind="mergesort")]
+            for s_donor in donorsT.tolist():
+                while (T_cache[s_donor] > T_cap + tol) and (moved_this_round < int(pcfg.max_offloads_per_round)):
+                    clusters_d = clusters_cache[s_donor]
+                    evals_d = evals_cache[s_donor]
+                    if clusters_d is None or evals_d is None or len(clusters_d) == 0:
+                        break
 
-            if not np.isfinite(U_beams[k_beam]) or U_beams[k_beam] <= 0.0:
-                continue
+                    U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
+                    if U_beams.size == 0:
+                        break
 
-            donor_local = np.asarray(clusters_d[k_beam], dtype=int)
-            donor_global = sat_user_ids[s_donor][donor_local]
-            if donor_global.size == 0:
-                continue
+                    orderU = np.argsort(-U_beams, kind="mergesort")
+                    moved = False
+                    for k_beam in orderU[: min(6, orderU.size)]:
+                        donor_local = np.asarray(clusters_d[int(k_beam)], dtype=int)
+                        if donor_local.size == 0:
+                            continue
+                        if try_move(s_donor, donor_local, mode="T"):
+                            moved_this_round += 1
+                            moved = True
+                            break
+                    if not moved:
+                        break
 
-            best_t = -1
-            best_score = -1e99
+        # PASS 3: smoothing (optional)
+        key_now = state_key()
+        if key_now[0] == 0 and key_now[3] == 0:
+            Wreq = int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0))
+            if Wreq >= W and moved_this_round < int(pcfg.max_offloads_per_round):
+                smooth_budget = min(2, int(pcfg.max_offloads_per_round) - moved_this_round)
+                for _ in range(int(max(0, smooth_budget))):
+                    s_donor = int(np.argmax(T_cache)) if S else 0
+                    clusters_d = clusters_cache[s_donor]
+                    evals_d = evals_cache[s_donor]
+                    if clusters_d is None or evals_d is None or len(clusters_d) == 0:
+                        break
+                    U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
+                    if U_beams.size == 0:
+                        break
+                    k_beam = int(np.argmax(U_beams))
+                    donor_local = np.asarray(clusters_d[k_beam], dtype=int)
+                    if donor_local.size == 0:
+                        break
 
-            for t in range(S):
-                if t == s_donor:
-                    continue
+                    def accept_smooth(kb, ka, Wb, Wa):
+                        if ka[0] != 0 or ka[3] != 0:
+                            return False
+                        return int(Wa) < int(Wb)
 
-                if K_cache[t] >= K_cap:
-                    continue
-
-                slack_T = T_cap - float(T_cache[t])
-                if slack_T <= 0.0:
-                    continue
-
-                elev = _elev_deg_users_to_sat(users_raw.ecef_m[donor_global], sat_ecef_m[t])
-                if np.any(elev < emin):
-                    continue
-
-                slack_K = float(K_cap - int(K_cache[t]))
-                score = 10.0 * slack_K + 1.0 * slack_T + 0.01 * float(np.mean(elev))
-                if score > best_score:
-                    best_score = score
-                    best_t = t
-
-            if best_t < 0:
-                continue
-
-            donor_old = sat_user_ids[s_donor].copy()
-            recv_old = sat_user_ids[best_t].copy()
-
-            key_before = violation_key()
-
-            moved_flags = np.isin(donor_old, donor_global, assume_unique=False)
-            sat_user_ids[s_donor] = donor_old[~moved_flags]
-            sat_user_ids[best_t] = np.concatenate([recv_old, donor_global], axis=0).astype(int, copy=False)
-
-            moves_tried += 1
-
-            ok_rebuild = True
-            for s in (s_donor, best_t):
-                try:
-                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-                except Exception:
-                    ok_rebuild = False
-                    break
-                users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
-                K_cache[s] = int(len(c)) if c is not None else 0
-
-                if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
-                    main_by_sat[s] = (u, c, e)
-                else:
-                    main_by_sat.pop(s, None)
-
-            if not ok_rebuild:
-                sat_user_ids[s_donor] = donor_old
-                sat_user_ids[best_t] = recv_old
-                for s in (s_donor, best_t):
-                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-                    users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
-                    K_cache[s] = int(len(c)) if c is not None else 0
-                    if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
-                        main_by_sat[s] = (u, c, e)
+                    if try_move(s_donor, donor_local, mode="smooth", accept_predicate=accept_smooth):
+                        moved_this_round += 1
                     else:
-                        main_by_sat.pop(s, None)
-                continue
-
-            key_after = violation_key()
-
-            if key_after < key_before:
-                moves_accepted += 1
-                moved_this_round += 1
-            else:
-                sat_user_ids[s_donor] = donor_old
-                sat_user_ids[best_t] = recv_old
-                for s in (s_donor, best_t):
-                    u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
-                    users_sat_cache[s], clusters_cache[s], evals_cache[s], T_cache[s] = u, c, e, float(T)
-                    K_cache[s] = int(len(c)) if c is not None else 0
-                    if u is not None and c is not None and e is not None and sat_user_ids[s].size > 0:
-                        main_by_sat[s] = (u, c, e)
-                    else:
-                        main_by_sat.pop(s, None)
+                        break
 
         if moved_this_round == 0:
             break
 
-    stats = recompute_stats_dict(moves_tried=moves_tried, moves_accepted=moves_accepted, rounds_used=rounds_used)
-    return bool(stats["feasible"]), sat_user_ids, main_by_sat, stats
+        # Early exit if feasible and not tight
+        key_now = state_key()
+        if key_now[0] == 0 and key_now[3] == 0:
+            Wreq = int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0))
+            if Wreq < W:
+                break
+
+    over_T = np.maximum(0.0, T_cache - T_cap)
+    over_K = np.maximum(0.0, K_cache.astype(float) - float(K_cap))
+    feasible = bool((np.sum(over_T > tol) == 0) and (np.sum(over_K > tol) == 0))
+
+    stats = {
+        "enabled": True,
+        "J_lanes": J,
+        "W_slots": W,
+        "Ks_max": K_cap,
+        "T_cap": T_cap,
+        "K_cap": K_cap,
+        "rounds": rounds_used,
+        "moves_tried": int(moves_tried),
+        "moves_accepted": int(moves_accepted),
+        "moves_tried_K": int(moves_tried_K),
+        "moves_accepted_K": int(moves_accepted_K),
+        "moves_tried_T": int(moves_tried_T),
+        "moves_accepted_T": int(moves_accepted_T),
+        "moves_tried_smooth": int(moves_tried_smooth),
+        "moves_accepted_smooth": int(moves_accepted_smooth),
+        "feasible": feasible,
+        "n_viol_T": int(np.sum(over_T > tol)),
+        "n_viol_K": int(np.sum(over_K > tol)),
+        "T_over_sum": float(np.sum(over_T)),
+        "K_over_sum": float(np.sum(over_K)),
+        "T_over_max": float(np.max(over_T)) if S else 0.0,
+        "K_over_max": float(np.max(over_K)) if S else 0.0,
+        "T_sum": float(np.sum(T_cache)),
+        "T_max": float(np.max(T_cache)) if S else 0.0,
+        "K_sum": int(np.sum(K_cache)),
+        "K_max": int(np.max(K_cache)) if S else 0,
+        "W_min_req": int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0)),
+        "global_cap": float(S) * T_cap,
+        "global_impossible": False,
+        "T_by_sat": T_cache.copy(),
+        "K_by_sat": K_cache.copy(),
+    }
+
+    return feasible, sat_user_ids, main_by_sat, stats
 
 
 @dataclass(frozen=True)
@@ -402,7 +511,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     ms = cfg.multisat
     pcfg = cfg.payload
 
-    # 1) Generate users
     prof.tic("usergen")
     user_list = generate_users(cfg)
     users_raw = pack_users_raw(user_list)
@@ -414,7 +522,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
     print_config(cfg)
 
-    # 2) Select satellites
     t0_utc = _parse_time_utc_iso(ms.time_utc_iso) if ms.time_utc_iso else None
 
     prof.tic("sat_select")
@@ -422,11 +529,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     prof.toc("sat_select")
 
     if len(active_sats) == 0:
-        raise RuntimeError("No active satellites found above elev mask at any anchor in the region bbox.")
+        raise RuntimeError("No active satellites found above elev mask.")
 
     sat_ecef_full = np.stack([s.ecef_m for s in active_sats], axis=0)
 
-    # 3) Prefix scan
     max_prefix = int(pcfg.max_prefix) if pcfg.max_prefix is not None else int(len(active_sats))
     max_prefix = max(1, min(max_prefix, int(len(active_sats))))
 
@@ -436,7 +542,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     for m in range(1, max_prefix + 1):
         sat_ecef_m = sat_ecef_full[:m].copy()
 
-        # association for this prefix
         prof.tic("assoc")
         assoc = associate_users_balanced(
             user_ecef_m=users_raw.ecef_m,
@@ -454,16 +559,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
         sat_user_ids_init = [np.asarray(x, dtype=int) for x in assoc.sat_user_ids]
 
-        if not pcfg.enabled:
-            main_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]] = {}
-            for s in range(m):
-                u, c, e, _T = _build_sat_piece(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof)
-                if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
-                    main_by_sat[s] = (u, c, e)
-            feasible = True
-            payload_stats = {"enabled": False, "feasible": True}
-            sat_user_ids_out = sat_user_ids_init
-        else:
+        if pcfg.enabled:
             feasible, sat_user_ids_out, main_by_sat, payload_stats = _payload_repair_inner(
                 users_raw=users_raw,
                 sat_ecef_m=sat_ecef_m,
@@ -471,6 +567,15 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
                 cfg=cfg,
                 prof=prof,
             )
+        else:
+            main_by_sat = {}
+            for s in range(m):
+                u, c, e, _T = _build_sat_piece(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof)
+                if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
+                    main_by_sat[s] = (u, c, e)
+            feasible = True
+            sat_user_ids_out = sat_user_ids_init
+            payload_stats = {"enabled": False, "feasible": True}
 
         cand = _Candidate(
             m=m,
@@ -509,20 +614,31 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
     chosen = best_feasible if best_feasible is not None else best_failed
     if chosen is None:
-        chosen = _Candidate(
-            m=max_prefix,
-            assoc=type("X", (), {"n_unserved": users_raw.n, "n_moves": 0})(),
-            sat_user_ids=[np.array([], dtype=int) for _ in range(max_prefix)],
-            main_by_sat={},
-            payload_stats={"enabled": bool(pcfg.enabled), "feasible": False},
-            feasible=False,
-        )
+        raise RuntimeError("No candidate produced.")
 
     payload_feasible = bool(chosen.feasible)
     m_used = int(chosen.m)
 
+    if enable_plots and pcfg.enabled and isinstance(chosen.payload_stats, dict):
+        T_by = chosen.payload_stats.get("T_by_sat", None)
+        K_by = chosen.payload_stats.get("K_by_sat", None)
+        if T_by is not None and K_by is not None:
+            try:
+                plot_payload_sat_stats(
+                    T_by_sat=np.asarray(T_by, dtype=float),
+                    K_by_sat=np.asarray(K_by, dtype=int),
+                    T_cap=float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
+                    K_cap=int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
+                    J_lanes=float(pcfg.J_lanes),
+                    W_slots=int(pcfg.W_slots),
+                    title=f"Payload loads per satellite (prefix m={m_used}, feasible={payload_feasible})",
+                )
+            except Exception:
+                pass
+
     pieces_main: list[tuple[Any, list[np.ndarray], list[dict]]] = [chosen.main_by_sat[s] for s in sorted(chosen.main_by_sat.keys())]
 
+    # ---- If payload infeasible: return early record with empty baselines/refinements ----
     if not payload_feasible:
         main_summary = summarize_multisat(pieces_main, cfg) if pieces_main else _empty_summary()
 
@@ -549,11 +665,19 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "ms_n_unserved": int(getattr(chosen.assoc, "n_unserved", 0)),
             "ms_assoc_moves": int(getattr(chosen.assoc, "n_moves", 0)),
 
-            # Payload metadata
             "payload_enabled": bool(pcfg.enabled),
             "payload_J_lanes": float(pcfg.J_lanes),
             "payload_W_slots": int(pcfg.W_slots),
             "payload_Ks_max": int(pcfg.Ks_max),
+
+            "payload_moves_tried": int(chosen.payload_stats.get("moves_tried", 0)),
+            "payload_moves_accepted": int(chosen.payload_stats.get("moves_accepted", 0)),
+            "payload_moves_tried_K": int(chosen.payload_stats.get("moves_tried_K", 0)),
+            "payload_moves_accepted_K": int(chosen.payload_stats.get("moves_accepted_K", 0)),
+            "payload_moves_tried_T": int(chosen.payload_stats.get("moves_tried_T", 0)),
+            "payload_moves_accepted_T": int(chosen.payload_stats.get("moves_accepted_T", 0)),
+            "payload_moves_tried_smooth": int(chosen.payload_stats.get("moves_tried_smooth", 0)),
+            "payload_moves_accepted_smooth": int(chosen.payload_stats.get("moves_accepted_smooth", 0)),
 
             "payload_feasible": False,
             "payload_best_m": int(m_used),
@@ -609,9 +733,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "time_baseline_tgbp_s": 0.0,
         }
 
-    # -----------------------------
-    # Payload-feasible path: refinements + baselines
-    # -----------------------------
+    # ---- Payload-feasible: run refinements & baselines per satellite ----
     pieces_ref: list[tuple[Any, list[np.ndarray], list[dict]]] = []
     pieces_lb: list[tuple[Any, list[np.ndarray], list[dict]]] = []
 
@@ -626,14 +748,14 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
     pieces_tgbp_rep: list[tuple[Any, list[np.ndarray], list[dict]]] = []
 
     busiest_sat_idx = 0
+    sizes = [len(x) for x in chosen.sat_user_ids]
+    if sizes:
+        busiest_sat_idx = int(np.argmax(sizes))
+
     busiest_users = None
     busiest_clusters = busiest_evals = None
     busiest_clusters_ref = busiest_evals_ref = None
     busiest_clusters_lb = busiest_evals_lb = None
-
-    sizes = [len(x) for x in chosen.sat_user_ids]
-    if sizes:
-        busiest_sat_idx = int(np.argmax(sizes))
 
     sat_ecef_m = sat_ecef_full[:m_used].copy()
     for s_idx in range(m_used):
@@ -720,6 +842,17 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         print_summary("Main + enterprise refinement [global]", ref_summary, cfg)
         print_summary("Main + enterprise + load-balance [global]", lb_summary, cfg)
 
+        print_summary("WKMeans++ baseline (demand) [global]", wk_demand_fixed, cfg)
+        print_summary("WKMeans++ baseline (demand) after repair [global]", wk_demand_rep, cfg)
+        print_summary("WKMeans++ baseline (demand*qos) [global]", wk_qos_fixed, cfg)
+        print_summary("WKMeans++ baseline (demand*qos) after repair [global]", wk_qos_rep, cfg)
+
+        if enable_fastbp:
+            print_summary("BK-Means baseline (fixed-K) [global]", bk_fixed, cfg)
+            print_summary("BK-Means baseline (after repair) [global]", bk_rep, cfg)
+            print_summary("TGBP baseline (fixed-K) [global]", tgbp_fixed, cfg)
+            print_summary("TGBP baseline (after repair) [global]", tgbp_rep, cfg)
+
     if enable_plots and busiest_users is not None and busiest_clusters is not None:
         plot_clusters_overlay(
             users_xy_m=busiest_users.xy_m,
@@ -779,6 +912,15 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         "payload_J_lanes": float(pcfg.J_lanes),
         "payload_W_slots": int(pcfg.W_slots),
         "payload_Ks_max": int(pcfg.Ks_max),
+
+        "payload_moves_tried": int(chosen.payload_stats.get("moves_tried", 0)),
+        "payload_moves_accepted": int(chosen.payload_stats.get("moves_accepted", 0)),
+        "payload_moves_tried_K": int(chosen.payload_stats.get("moves_tried_K", 0)),
+        "payload_moves_accepted_K": int(chosen.payload_stats.get("moves_accepted_K", 0)),
+        "payload_moves_tried_T": int(chosen.payload_stats.get("moves_tried_T", 0)),
+        "payload_moves_accepted_T": int(chosen.payload_stats.get("moves_accepted_T", 0)),
+        "payload_moves_tried_smooth": int(chosen.payload_stats.get("moves_tried_smooth", 0)),
+        "payload_moves_accepted_smooth": int(chosen.payload_stats.get("moves_accepted_smooth", 0)),
 
         "payload_feasible": True,
         "payload_best_m": int(m_used),

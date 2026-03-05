@@ -362,6 +362,16 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "payload_W_slots",
         "payload_Ks_max",
 
+        # payload repair effort
+        "payload_moves_tried",
+        "payload_moves_accepted",
+        "payload_moves_tried_K",
+        "payload_moves_accepted_K",
+        "payload_moves_tried_T",
+        "payload_moves_accepted_T",
+        "payload_moves_tried_smooth",
+        "payload_moves_accepted_smooth",
+
         # payload feasibility + chosen prefix
         "payload_feasible",
         "payload_best_m",

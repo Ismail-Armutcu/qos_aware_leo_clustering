@@ -272,7 +272,7 @@ def refine_load_balance_by_overlap(
                     continue
 
                 if not allow_receiver_close:
-                    receivers = receivers[U[receivers] <= receiver_u_max]
+                    receivers = receivers[U[receivers] <= receiver_u_max * cfg.payload.W_slots]
                     if receivers.size == 0:
                         continue
 
@@ -364,9 +364,9 @@ def refine_load_balance_by_overlap(
                         s_to = float(demand[uid]) / (rate_to + 1e-9)
                         U_to_new = U[recv_arr2] + s_to
 
-                        ok_cap = U_to_new <= (1.0 + 1e-9)
+                        ok_cap = U_to_new <= (cfg.payload.W_slots + 1e-9)
                         if not allow_receiver_close:
-                            ok_cap &= (U_to_new <= (receiver_u_max + 1e-12))
+                            ok_cap &= (U_to_new <= (receiver_u_max * cfg.payload.W_slots + 1e-12))
                         if not np.any(ok_cap):
                             continue
 

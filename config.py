@@ -78,7 +78,7 @@ class LoadBalanceRefineConfig:
     risk_slack: float = 1e-4
     exposure_slack: int = 0
     allow_receiver_close_to_full: bool = False
-    receiver_u_max: float = 0.995
+    receiver_u_max: float = 0.90
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ class PayloadConfig:
 
     # Beam-hopping / scheduling window model:
     #   per-sat time feasibility: sum_b U_{s,b} <= J_lanes * W_slots
-    J_lanes: float = 16.0
+    J_lanes: float = 8.0
     W_slots: int = 8
 
     # Per-satellite beam count cap:

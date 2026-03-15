@@ -656,7 +656,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "rho_safe": cfg.ent.rho_safe,
             "eirp_dbw": cfg.phy.eirp_dbw,
             "bandwidth_hz": cfg.phy.bandwidth_hz,
-            "radius_modes_km": cfg.beam.radius_modes_km,
+            "theta_3db_deg": cfg.beam.theta_3db_deg,
 
             "ms_tle_path": ms.tle_path,
             "ms_time_utc": t0_utc.isoformat(),
@@ -899,7 +899,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         "rho_safe": cfg.ent.rho_safe,
         "eirp_dbw": cfg.phy.eirp_dbw,
         "bandwidth_hz": cfg.phy.bandwidth_hz,
-        "radius_modes_km": cfg.beam.radius_modes_km,
+        "theta_3db_deg": cfg.beam.theta_3db_deg,
 
         "ms_tle_path": ms.tle_path,
         "ms_time_utc": t0_utc.isoformat(),

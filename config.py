@@ -36,7 +36,11 @@ class PhyConfig:
 
 @dataclass(frozen=True)
 class BeamConfig:
-    radius_modes_km: Tuple[float, ...] = (5.0, 10.0, 15.0, 20.0)
+    # Fixed half-power beamwidth (3 dB half-angle) in degrees.
+    # Ground footprint radius is derived per beam as:
+    #   R_m = d_center * tan(theta_3db)
+    # where d_center is the satellite-to-beam-center slant range.
+    theta_3db_deg: float = 3.0
 
 
 @dataclass(frozen=True)

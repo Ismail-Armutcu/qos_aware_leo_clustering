@@ -30,9 +30,22 @@ except Exception:  # pragma: no cover
     _SKKMeans = None  # type: ignore
 
 
-def _rmax_m_from_cfg(cfg: ScenarioConfig) -> float:
-    # Uses the largest footprint radius mode as r_max.
-    return float(max(cfg.beam.radius_modes_km)) * 1000.0
+def _rref_m_from_cfg(users: Users, cfg: ScenarioConfig) -> float:
+    """
+    Conservative reference footprint radius for graph-based baselines under the
+    fixed-angle beam model.
+
+    Since BKMeans/TGBP rely on a single global distance threshold, while the
+    actual footprint radius varies with slant range, we derive a worst-case bound:
+
+        r_ref = tan(theta_3db) * max_i(range_i)
+
+    This keeps the baselines runnable and conservative, but it is an approximation.
+    """
+    theta_3db = float(np.deg2rad(cfg.beam.theta_3db_deg))
+    if theta_3db <= 0.0:
+        return 0.0
+    return float(np.tan(theta_3db) * np.max(users.range_m))
 
 
 def _pairwise_diameter_sq(points_xy: np.ndarray) -> float:
@@ -254,12 +267,13 @@ def run_tgbp_baseline(
     """
     TGBP baseline (paper), adapted to your beam model.
 
-    Edge if dist <= 2*r_max.
-    Clique cover -> initial clusters, then your repair for capacity feasibility.
+    Edge if dist <= 2*r_ref, where r_ref is a conservative reference radius
+    derived from the fixed beam angle. Clique cover -> initial clusters, then
+    your repair for capacity feasibility.
     """
     xy = users.xy_m
-    rmax = _rmax_m_from_cfg(cfg) if rmax_m is None else float(rmax_m)
-    dist_thresh = 2.0 * rmax
+    rref = _rref_m_from_cfg(users, cfg) if rmax_m is None else float(rmax_m)
+    dist_thresh = 2.0 * rref
 
     degrees = _compute_degrees(xy, dist_thresh)
     groups = _tgbp_phase1_greedy_cover(xy, dist_thresh, degrees)
@@ -401,11 +415,12 @@ def run_bkmeans_baseline(
     BK-Means baseline (paper), adapted to your beam model.
 
     Finds smallest K such that a K-means partition yields all clusters as cliques
-    under threshold dist <= 2*r_max. Then runs your repair for feasibility.
+    under threshold dist <= 2*r_ref, where r_ref is a conservative reference
+    radius derived from the fixed beam angle. Then runs your repair for feasibility.
     """
     xy = users.xy_m
-    rmax = _rmax_m_from_cfg(cfg)
-    dist_thresh = 2.0 * rmax
+    rref = _rref_m_from_cfg(users, cfg)
+    dist_thresh = 2.0 * rref
 
     N = xy.shape[0]
     rng = np.random.default_rng(int(cfg.run.seed) + int(seed_offset))

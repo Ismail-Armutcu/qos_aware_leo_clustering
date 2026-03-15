@@ -332,7 +332,7 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "rho_safe": rec.get("rho_safe", 0.0),
         "eirp_dbw": rec.get("eirp_dbw", 0.0),
         "bandwidth_hz": rec.get("bandwidth_hz", 0.0),
-        "radius_modes_km": str(rec.get("radius_modes_km", ())),
+        "theta_3db_deg": rec.get("theta_3db_deg", 0.0),
 
         "time_usergen_s": rec.get("time_usergen_s", 0.0),
         "time_sat_select_s": rec.get("time_sat_select_s", 0.0),

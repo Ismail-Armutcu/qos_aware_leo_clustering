@@ -48,6 +48,46 @@ def _empty_summary() -> dict[str, Any]:
         "ent_z_mean": 0.0,
         "ent_z_p90": 0.0,
         "ent_z_max": 0.0,
+
+        "radius_mean_km": 0.0,
+        "radius_min_km": 0.0,
+        "radius_p10_km": 0.0,
+        "radius_p50_km": 0.0,
+        "radius_p90_km": 0.0,
+        "radius_max_km": 0.0,
+
+        "sat_mean_radius_mean_km": 0.0,
+        "sat_mean_radius_min_km": 0.0,
+        "sat_mean_radius_max_km": 0.0,
+    }
+
+
+def _nan_summary() -> dict[str, Any]:
+    nan = float("nan")
+    return {
+        "K": nan,
+        "feasible_rate": nan,
+        "U_mean": nan,
+        "U_max": nan,
+        "U_min": nan,
+        "risk_sum": nan,
+        "ent_total": nan,
+        "ent_exposed": nan,
+        "ent_edge_pct": nan,
+        "ent_z_mean": nan,
+        "ent_z_p90": nan,
+        "ent_z_max": nan,
+
+        "radius_mean_km": nan,
+        "radius_min_km": nan,
+        "radius_p10_km": nan,
+        "radius_p50_km": nan,
+        "radius_p90_km": nan,
+        "radius_max_km": nan,
+
+        "sat_mean_radius_mean_km": nan,
+        "sat_mean_radius_min_km": nan,
+        "sat_mean_radius_max_km": nan,
     }
 
 
@@ -702,23 +742,23 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "payload_global_impossible": bool(chosen.payload_stats.get("global_impossible", False)),
 
             "main": main_summary,
-            "main_ref": _empty_summary(),
-            "main_ref_lb": _empty_summary(),
-            "wk_demand_fixed": _empty_summary(),
-            "wk_demand_rep": _empty_summary(),
-            "wk_qos_fixed": _empty_summary(),
-            "wk_qos_rep": _empty_summary(),
-            "bk_fixed": _empty_summary(),
-            "bk_rep": _empty_summary(),
-            "tgbp_fixed": _empty_summary(),
-            "tgbp_rep": _empty_summary(),
+            "main_ref": _nan_summary(),
+            "main_ref_lb": _nan_summary(),
+            "wk_demand_fixed": _nan_summary(),
+            "wk_demand_rep": _nan_summary(),
+            "wk_qos_fixed": _nan_summary(),
+            "wk_qos_rep": _nan_summary(),
+            "bk_fixed": _nan_summary(),
+            "bk_rep": _nan_summary(),
+            "tgbp_fixed": _nan_summary(),
+            "tgbp_rep": _nan_summary(),
 
             "time_usergen_s": prof.t.get("usergen", 0.0),
             "time_sat_select_s": prof.t.get("sat_select", 0.0),
             "time_assoc_s": prof.t.get("assoc", 0.0),
             "time_split_s": prof.t.get("split", 0.0),
-            "time_ent_ref_s": 0.0,
-            "time_lb_ref_s": 0.0,
+            "time_ent_ref_s": float("nan"),
+            "time_lb_ref_s": float("nan"),
 
             "eval_calls": prof.c.get("eval_calls", 0),
             "n_splits": prof.c.get("n_splits", 0),
@@ -727,10 +767,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             "lb_moves_tried": 0,
             "lb_moves_accepted": 0,
 
-            "time_baseline_without_qos_s": 0.0,
-            "time_baseline_with_qos_s": 0.0,
-            "time_baseline_bkmeans_s": 0.0,
-            "time_baseline_tgbp_s": 0.0,
+            "time_baseline_without_qos_s": float("nan"),
+            "time_baseline_with_qos_s": float("nan"),
+            "time_baseline_bkmeans_s": float("nan"),
+            "time_baseline_tgbp_s": float("nan"),
         }
 
     # ---- Payload-feasible: run refinements & baselines per satellite ----

@@ -129,6 +129,40 @@ def print_config(cfg: Any) -> None:
     print("\n" + "=" * 72 + "\n")
 
 
+
+def _radius_stats_km_from_values(radius_km: np.ndarray) -> dict[str, float]:
+    if radius_km.size == 0:
+        return {
+            "radius_mean_km": 0.0,
+            "radius_min_km": 0.0,
+            "radius_p10_km": 0.0,
+            "radius_p50_km": 0.0,
+            "radius_p90_km": 0.0,
+            "radius_max_km": 0.0,
+        }
+    return {
+        "radius_mean_km": float(np.mean(radius_km)),
+        "radius_min_km": float(np.min(radius_km)),
+        "radius_p10_km": float(np.quantile(radius_km, 0.10)),
+        "radius_p50_km": float(np.quantile(radius_km, 0.50)),
+        "radius_p90_km": float(np.quantile(radius_km, 0.90)),
+        "radius_max_km": float(np.max(radius_km)),
+    }
+
+
+def _sat_mean_radius_stats_km_from_values(sat_mean_radius_km: np.ndarray) -> dict[str, float]:
+    if sat_mean_radius_km.size == 0:
+        return {
+            "sat_mean_radius_mean_km": 0.0,
+            "sat_mean_radius_min_km": 0.0,
+            "sat_mean_radius_max_km": 0.0,
+        }
+    return {
+        "sat_mean_radius_mean_km": float(np.mean(sat_mean_radius_km)),
+        "sat_mean_radius_min_km": float(np.min(sat_mean_radius_km)),
+        "sat_mean_radius_max_km": float(np.max(sat_mean_radius_km)),
+    }
+
 def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
     """
     Compute KPIs for a clustering result using eval outputs.
@@ -174,6 +208,12 @@ def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
 
     risk_sum = float(np.sum([ev.get("risk", 0.0) for ev in evals])) if K > 0 else 0.0
 
+    radius_km = np.asarray([float(ev["R_m"]) / 1000.0 for ev in evals if ev.get("R_m") is not None], dtype=float)
+    radius_stats = _radius_stats_km_from_values(radius_km)
+    sat_radius_stats = _sat_mean_radius_stats_km_from_values(
+        np.asarray([float(np.mean(radius_km))], dtype=float) if radius_km.size > 0 else np.array([], dtype=float)
+    )
+
     return {
         "K": int(K),
         "feasible_rate": float(feasible_rate),
@@ -188,6 +228,9 @@ def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
         "ent_z_mean": float(ent_z_mean),
         "ent_z_p90": float(ent_z_p90),
         "ent_z_max": float(ent_z_max),
+
+        **radius_stats,
+        **sat_radius_stats,
     }
 
 
@@ -259,6 +302,17 @@ def summarize_multisat(
     else:
         ent_z_mean = ent_z_p90 = ent_z_max = 0.0
 
+    radius_all_km: list[float] = []
+    sat_mean_radius_km: list[float] = []
+    for _users_sat, _clusters_sat, evals_sat in pieces:
+        r_sat = np.asarray([float(ev["R_m"]) / 1000.0 for ev in evals_sat if ev.get("R_m") is not None], dtype=float)
+        if r_sat.size > 0:
+            radius_all_km.extend(r_sat.tolist())
+            sat_mean_radius_km.append(float(np.mean(r_sat)))
+
+    radius_stats = _radius_stats_km_from_values(np.asarray(radius_all_km, dtype=float))
+    sat_radius_stats = _sat_mean_radius_stats_km_from_values(np.asarray(sat_mean_radius_km, dtype=float))
+
     return {
         "K": int(total_K),
         "feasible_rate": float(feasible_rate),
@@ -273,6 +327,9 @@ def summarize_multisat(
         "ent_z_mean": float(ent_z_mean),
         "ent_z_p90": float(ent_z_p90),
         "ent_z_max": float(ent_z_max),
+
+        **radius_stats,
+        **sat_radius_stats,
     }
 
 
@@ -286,6 +343,15 @@ def print_summary(title: str, s: dict, cfg: ScenarioConfig):
         f"({s['ent_exposed']}/{s['ent_total']})  (z > rho={cfg.ent.rho_safe})"
     )
     print(f"Enterprise z: mean={s['ent_z_mean']:.3f}, p90={s['ent_z_p90']:.3f}, max={s['ent_z_max']:.3f}")
+    print(
+        f"Beam radius [km]: mean={s.get('radius_mean_km', 0.0):.3f}, "
+        f"p50={s.get('radius_p50_km', 0.0):.3f}, p90={s.get('radius_p90_km', 0.0):.3f}, "
+        f"max={s.get('radius_max_km', 0.0):.3f}"
+    )
+    print(
+        f"Satellite mean beam radius [km]: min={s.get('sat_mean_radius_min_km', 0.0):.3f}, "
+        f"mean={s.get('sat_mean_radius_mean_km', 0.0):.3f}, max={s.get('sat_mean_radius_max_km', 0.0):.3f}"
+    )
     print(f"Total enterprise risk (soft): {s['risk_sum']:.3f}")
 
 
@@ -310,6 +376,46 @@ def _empty_summary() -> dict[str, Any]:
         "ent_z_mean": 0.0,
         "ent_z_p90": 0.0,
         "ent_z_max": 0.0,
+
+        "radius_mean_km": 0.0,
+        "radius_min_km": 0.0,
+        "radius_p10_km": 0.0,
+        "radius_p50_km": 0.0,
+        "radius_p90_km": 0.0,
+        "radius_max_km": 0.0,
+
+        "sat_mean_radius_mean_km": 0.0,
+        "sat_mean_radius_min_km": 0.0,
+        "sat_mean_radius_max_km": 0.0,
+    }
+
+
+def _nan_summary() -> dict[str, Any]:
+    nan = float("nan")
+    return {
+        "K": nan,
+        "feasible_rate": nan,
+        "U_mean": nan,
+        "U_max": nan,
+        "U_min": nan,
+        "risk_sum": nan,
+        "ent_total": nan,
+        "ent_exposed": nan,
+        "ent_edge_pct": nan,
+        "ent_z_mean": nan,
+        "ent_z_p90": nan,
+        "ent_z_max": nan,
+
+        "radius_mean_km": nan,
+        "radius_min_km": nan,
+        "radius_p10_km": nan,
+        "radius_p50_km": nan,
+        "radius_p90_km": nan,
+        "radius_max_km": nan,
+
+        "sat_mean_radius_mean_km": nan,
+        "sat_mean_radius_min_km": nan,
+        "sat_mean_radius_max_km": nan,
     }
 
 
@@ -338,8 +444,8 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "time_sat_select_s": rec.get("time_sat_select_s", 0.0),
         "time_assoc_s": rec.get("time_assoc_s", 0.0),
         "time_split_s": rec.get("time_split_s", 0.0),
-        "time_ent_ref_s": rec.get("time_ent_ref_s", 0.0),
-        "time_lb_ref_s": rec.get("time_lb_ref_s", 0.0),
+        "time_ent_ref_s": rec.get("time_ent_ref_s", float("nan")),
+        "time_lb_ref_s": rec.get("time_lb_ref_s", float("nan")),
 
         "eval_calls": rec.get("eval_calls", 0),
         "n_splits": rec.get("n_splits", 0),
@@ -348,10 +454,10 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "lb_moves_tried": rec.get("lb_moves_tried", 0),
         "lb_moves_accepted": rec.get("lb_moves_accepted", 0),
 
-        "time_baseline_without_qos_s": rec.get("time_baseline_without_qos_s", 0.0),
-        "time_baseline_with_qos_s": rec.get("time_baseline_with_qos_s", 0.0),
-        "time_baseline_bkmeans_s": rec.get("time_baseline_bkmeans_s", 0.0),
-        "time_baseline_tgbp_s": rec.get("time_baseline_tgbp_s", 0.0),
+        "time_baseline_without_qos_s": rec.get("time_baseline_without_qos_s", float("nan")),
+        "time_baseline_with_qos_s": rec.get("time_baseline_with_qos_s", float("nan")),
+        "time_baseline_bkmeans_s": rec.get("time_baseline_bkmeans_s", float("nan")),
+        "time_baseline_tgbp_s": rec.get("time_baseline_tgbp_s", float("nan")),
     }
 
     # Optional payload metadata (if present)
@@ -401,17 +507,17 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
             row[k] = rec[k]
 
     # Algorithm KPIs
-    row |= flatten_summary("main", rec.get("main", _empty_summary()))
-    row |= flatten_summary("main_ref", rec.get("main_ref", _empty_summary()))
-    row |= flatten_summary("main_ref_lb", rec.get("main_ref_lb", _empty_summary()))
-    row |= flatten_summary("wk_demand_fixed", rec.get("wk_demand_fixed", _empty_summary()))
-    row |= flatten_summary("wk_demand_rep", rec.get("wk_demand_rep", _empty_summary()))
-    row |= flatten_summary("wk_qos_fixed", rec.get("wk_qos_fixed", _empty_summary()))
-    row |= flatten_summary("wk_qos_rep", rec.get("wk_qos_rep", _empty_summary()))
-    row |= flatten_summary("bk_fixed", rec.get("bk_fixed", _empty_summary()))
-    row |= flatten_summary("bk_rep", rec.get("bk_rep", _empty_summary()))
-    row |= flatten_summary("tgbp_fixed", rec.get("tgbp_fixed", _empty_summary()))
-    row |= flatten_summary("tgbp_rep", rec.get("tgbp_rep", _empty_summary()))
+    row |= flatten_summary("main", rec.get("main", _nan_summary()))
+    row |= flatten_summary("main_ref", rec.get("main_ref", _nan_summary()))
+    row |= flatten_summary("main_ref_lb", rec.get("main_ref_lb", _nan_summary()))
+    row |= flatten_summary("wk_demand_fixed", rec.get("wk_demand_fixed", _nan_summary()))
+    row |= flatten_summary("wk_demand_rep", rec.get("wk_demand_rep", _nan_summary()))
+    row |= flatten_summary("wk_qos_fixed", rec.get("wk_qos_fixed", _nan_summary()))
+    row |= flatten_summary("wk_qos_rep", rec.get("wk_qos_rep", _nan_summary()))
+    row |= flatten_summary("bk_fixed", rec.get("bk_fixed", _nan_summary()))
+    row |= flatten_summary("bk_rep", rec.get("bk_rep", _nan_summary()))
+    row |= flatten_summary("tgbp_fixed", rec.get("tgbp_fixed", _nan_summary()))
+    row |= flatten_summary("tgbp_rep", rec.get("tgbp_rep", _nan_summary()))
     return row
 
 

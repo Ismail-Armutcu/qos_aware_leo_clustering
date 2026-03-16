@@ -141,12 +141,19 @@ def sort_active_sats(
     -------
     (t0_utc, active_sats)
       - t0_utc: UTC timezone-aware datetime
-      - active_sats: List[ActiveSat] in greedy order, length <= scenarioConfig.multisat.n_active
+      - active_sats: List[ActiveSat] containing all satellites that are
+        visible above the elevation mask at at least one anchor. The list is
+        ordered first by greedy positive marginal anchor-quality gain, then by
+        a fallback anchor-quality score for the remaining visible satellites.
 
     Notes
     -----
     - This fully replaces the old reference-site elevation sorting logic.
-    - 'elev_ref_deg' is kept for compatibility but now stores the MAX elevation across anchors.
+    - This function no longer truncates the returned list using
+      scenarioConfig.multisat.n_active. Prefix-search depth should be limited
+      via scenarioConfig.payload.max_prefix.
+    - 'elev_ref_deg' is kept for compatibility but now stores the MAX elevation
+      across anchors.
     """
     # Skyfield import inside to keep the rest of the project usable without it.
     from skyfield.api import load, wgs84
@@ -154,7 +161,6 @@ def sort_active_sats(
 
     tle_path = scenarioConfig.multisat.tle_path
     emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
-    n_active = int(scenarioConfig.multisat.n_active)
     bbox = scenarioConfig.bbox
 
     ts = load.timescale()
@@ -198,24 +204,38 @@ def sort_active_sats(
     # Anchor quality q[p, j]
     q = _quality_from_elev_deg(elev_c, emin_deg=emin_deg, mode=quality_mode)
 
-    # (2) Greedy marginal-gain ordering
+    # (2) Greedy ordering over all visible candidates
+    #
+    # Phase A: keep selecting satellites that provide positive marginal anchor
+    #          quality gain. This preserves the current strong-front ordering.
+    # Phase B: append the remaining visible satellites in a fallback order
+    #          instead of truncating the list. This makes sort_active_sats() a
+    #          ranking function, while scenarioConfig.payload.max_prefix remains
+    #          the runtime/search cap in the outer prefix loop.
     Mc = q.shape[1]
     best = np.zeros(P, dtype=np.float64)
     chosen = np.zeros(Mc, dtype=bool)
     order_local: List[int] = []
 
-    kmax = min(n_active, Mc)
-    for _ in range(kmax):
+    while True:
         improvement = np.maximum(q - best[:, None], 0.0)  # (P,Mc)
         delta = improvement.sum(axis=0)                   # (Mc,)
         delta[chosen] = -1.0
 
         j = int(np.argmax(delta))
         if delta[j] <= 0.0:
-            break  # no further improvement anywhere
+            break  # no further positive marginal improvement
         chosen[j] = True
         order_local.append(j)
         best = np.maximum(best, q[:, j])
+
+    # Append the remaining visible satellites in fallback order.
+    # We use total anchor quality as a stable, visibility-aware ranking.
+    remaining = np.where(~chosen)[0]
+    if remaining.size > 0:
+        rem_score = q[:, remaining].sum(axis=0)
+        rem_order = remaining[np.argsort(-rem_score, kind="mergesort")]
+        order_local.extend(rem_order.tolist())
 
     selected_sat_idx = cand_idx[np.array(order_local, dtype=int)]
 

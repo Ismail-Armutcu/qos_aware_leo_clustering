@@ -40,7 +40,7 @@ class BeamConfig:
     # Ground footprint radius is derived per beam as:
     #   R_m = d_center * tan(theta_3db)
     # where d_center is the satellite-to-beam-center slant range.
-    theta_3db_deg: float = 3.0
+    theta_3db_deg: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -111,7 +111,6 @@ class RunConfig:
 class MultiSatConfig:
     tle_path: str = "starlink.tle"
     elev_mask_deg: float = 25.0
-    n_active: int = 30
 
     # Optional fixed snapshot time for reproducibility (ISO string)
     # Example: "2026-01-29T16:19:56Z"

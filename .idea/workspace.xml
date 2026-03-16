@@ -4,13 +4,15 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor load balancing and feasibility logic: update `refine_load_balance.py` to incorporate payload slots multiplier for receiver utilization calculations and enforce updated `receiver_u_max`. Adjust QoS lane multiplier (`J_lanes`) in `config.py` and modify associated test data in `sweep_phaseA.csv`.">
+    <list default="true" id="3118279e-de51-4cc4-b0d9-039cbaf2b947" name="Changes" comment="Refactor beam model logic: replace `radius_modes_km` with fixed-angle `theta_3db_deg` beamwidth. Update evaluator and baseline functions to derive footprint radius based on beam angle and slant range. Adjust related config and helper functions for compatibility.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/baselines/fast_beam_placement.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/baselines/fast_beam_placement.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plots/phaseBold/phaseB_tables.txt" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/helper.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/helper.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/satellites.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/satellites.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sweep_plots.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/sweep_plots.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseA.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseA.csv" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/sweep_phaseB.csv" beforeDir="false" afterPath="$PROJECT_DIR$/sweep_phaseB.csv" afterDir="false" />
     </list>
@@ -32,7 +34,7 @@
     </selectedModels>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="89" />
+    <option name="cachedIndexableFilesCount" value="111" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="FileTemplateManagerImpl">
@@ -72,6 +74,9 @@
     <commands />
     <urls />
   </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="AISelfReview" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0
 }</component>
@@ -109,8 +114,8 @@
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\pythonWorkspace\qos_aware_user_clustering\src" />
-      <recent name="C:\pythonWorkspace\qos_aware_user_clustering\src\baselines" />
       <recent name="C:\pythonWorkspace\qos_aware_user_clustering" />
+      <recent name="C:\pythonWorkspace\qos_aware_user_clustering\src\baselines" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
       <recent name="C:\pythonWorkspace\qos_aware_user_clustering\src\post_analysis" />
@@ -168,7 +173,8 @@
       <workItem from="1772303309290" duration="5190000" />
       <workItem from="1772476806069" duration="3963000" />
       <workItem from="1772738837900" duration="7576000" />
-      <workItem from="1773597378460" duration="3067000" />
+      <workItem from="1773597378460" duration="3171000" />
+      <workItem from="1773681198486" duration="8499000" />
     </task>
     <task id="LOCAL-00001" summary="Refactor clustering evaluation function and move `build_users_container` to `usergen.py`.">
       <option name="closed" value="true" />
@@ -314,7 +320,15 @@
       <option name="project" value="LOCAL" />
       <updated>1772743563570</updated>
     </task>
-    <option name="localTasksCounter" value="19" />
+    <task id="LOCAL-00019" summary="Refactor beam model logic: replace `radius_modes_km` with fixed-angle `theta_3db_deg` beamwidth. Update evaluator and baseline functions to derive footprint radius based on beam angle and slant range. Adjust related config and helper functions for compatibility.">
+      <option name="closed" value="true" />
+      <created>1773605726873</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1773605726873</updated>
+    </task>
+    <option name="localTasksCounter" value="20" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -352,13 +366,15 @@
     <MESSAGE value="Refactor evaluator and pipeline logic: enforce contract for `R_m` overrides, add payload feasibility checks, and streamline satellite selection/association in `pipeline.py`. Remove redundant comments and improve helper functions for compatibility with multi-satellite scenarios." />
     <MESSAGE value="Refactor evaluator and pipeline logic: add checks for per-satellite time and beam caps, enhance payload feasibility metrics, and optimize repair operator for cluster-level offloads. Update helper functions and `sweep_plots.py` to handle payload masking, infeasibility filtering, and enhanced aggregation." />
     <MESSAGE value="Refactor load balancing and feasibility logic: update `refine_load_balance.py` to incorporate payload slots multiplier for receiver utilization calculations and enforce updated `receiver_u_max`. Adjust QoS lane multiplier (`J_lanes`) in `config.py` and modify associated test data in `sweep_phaseA.csv`." />
-    <option name="LAST_COMMIT_MESSAGE" value="Refactor load balancing and feasibility logic: update `refine_load_balance.py` to incorporate payload slots multiplier for receiver utilization calculations and enforce updated `receiver_u_max`. Adjust QoS lane multiplier (`J_lanes`) in `config.py` and modify associated test data in `sweep_phaseA.csv`." />
+    <MESSAGE value="Refactor beam model: replace fixed radius modes with half-power beamwidth angle (theta_3db) for footprint calculation, update evaluator and baselines to derive radius dynamically, and adjust pipeline configurations and helper functions accordingly." />
+    <MESSAGE value="Refactor beam model logic: replace `radius_modes_km` with fixed-angle `theta_3db_deg` beamwidth. Update evaluator and baseline functions to derive footprint radius based on beam angle and slant range. Adjust related config and helper functions for compatibility." />
+    <option name="LAST_COMMIT_MESSAGE" value="Refactor beam model logic: replace `radius_modes_km` with fixed-angle `theta_3db_deg` beamwidth. Update evaluator and baseline functions to derive footprint radius based on beam angle and slant range. Adjust related config and helper functions for compatibility." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$config.coverage" NAME="config Coverage Results" MODIFIED="1768758409037" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$main.coverage" NAME="main Coverage Results" MODIFIED="1768758431251" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/qos_aware_user_clustering$plot.coverage" NAME="plot Coverage Results" MODIFIED="1769358191913" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
-    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1773605225460" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/qos_aware_user_clustering$run.coverage" NAME="run Coverage Results" MODIFIED="1773695284891" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

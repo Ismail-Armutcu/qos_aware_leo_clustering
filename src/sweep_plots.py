@@ -100,12 +100,77 @@ class AggSeries:
     n: np.ndarray
 
 
+_DOWNSTREAM_INVALID_IF_PAYLOAD_INFEASIBLE = {
+    # refinement/main downstream summaries
+    "main_ref_K", "main_ref_feasible_rate", "main_ref_U_mean", "main_ref_U_max", "main_ref_U_min",
+    "main_ref_risk_sum", "main_ref_ent_total", "main_ref_ent_exposed", "main_ref_ent_edge_pct",
+    "main_ref_ent_z_mean", "main_ref_ent_z_p90", "main_ref_ent_z_max",
+    "main_ref_radius_mean_km", "main_ref_radius_min_km", "main_ref_radius_p10_km", "main_ref_radius_p50_km",
+    "main_ref_radius_p90_km", "main_ref_radius_max_km",
+    "main_ref_sat_mean_radius_mean_km", "main_ref_sat_mean_radius_min_km", "main_ref_sat_mean_radius_max_km",
+
+    "main_ref_lb_K", "main_ref_lb_feasible_rate", "main_ref_lb_U_mean", "main_ref_lb_U_max", "main_ref_lb_U_min",
+    "main_ref_lb_risk_sum", "main_ref_lb_ent_total", "main_ref_lb_ent_exposed", "main_ref_lb_ent_edge_pct",
+    "main_ref_lb_ent_z_mean", "main_ref_lb_ent_z_p90", "main_ref_lb_ent_z_max",
+    "main_ref_lb_radius_mean_km", "main_ref_lb_radius_min_km", "main_ref_lb_radius_p10_km", "main_ref_lb_radius_p50_km",
+    "main_ref_lb_radius_p90_km", "main_ref_lb_radius_max_km",
+    "main_ref_lb_sat_mean_radius_mean_km", "main_ref_lb_sat_mean_radius_min_km", "main_ref_lb_sat_mean_radius_max_km",
+
+    # baselines
+    "wk_demand_fixed_K", "wk_demand_fixed_feasible_rate", "wk_demand_fixed_U_mean", "wk_demand_fixed_U_max", "wk_demand_fixed_U_min",
+    "wk_demand_fixed_risk_sum", "wk_demand_fixed_ent_total", "wk_demand_fixed_ent_exposed", "wk_demand_fixed_ent_edge_pct",
+    "wk_demand_fixed_ent_z_mean", "wk_demand_fixed_ent_z_p90", "wk_demand_fixed_ent_z_max",
+    "wk_demand_rep_K", "wk_demand_rep_feasible_rate", "wk_demand_rep_U_mean", "wk_demand_rep_U_max", "wk_demand_rep_U_min",
+    "wk_demand_rep_risk_sum", "wk_demand_rep_ent_total", "wk_demand_rep_ent_exposed", "wk_demand_rep_ent_edge_pct",
+    "wk_demand_rep_ent_z_mean", "wk_demand_rep_ent_z_p90", "wk_demand_rep_ent_z_max",
+
+    "wk_qos_fixed_K", "wk_qos_fixed_feasible_rate", "wk_qos_fixed_U_mean", "wk_qos_fixed_U_max", "wk_qos_fixed_U_min",
+    "wk_qos_fixed_risk_sum", "wk_qos_fixed_ent_total", "wk_qos_fixed_ent_exposed", "wk_qos_fixed_ent_edge_pct",
+    "wk_qos_fixed_ent_z_mean", "wk_qos_fixed_ent_z_p90", "wk_qos_fixed_ent_z_max",
+    "wk_qos_rep_K", "wk_qos_rep_feasible_rate", "wk_qos_rep_U_mean", "wk_qos_rep_U_max", "wk_qos_rep_U_min",
+    "wk_qos_rep_risk_sum", "wk_qos_rep_ent_total", "wk_qos_rep_ent_exposed", "wk_qos_rep_ent_edge_pct",
+    "wk_qos_rep_ent_z_mean", "wk_qos_rep_ent_z_p90", "wk_qos_rep_ent_z_max",
+
+    "bk_fixed_K", "bk_fixed_feasible_rate", "bk_fixed_U_mean", "bk_fixed_U_max", "bk_fixed_U_min",
+    "bk_fixed_risk_sum", "bk_fixed_ent_total", "bk_fixed_ent_exposed", "bk_fixed_ent_edge_pct",
+    "bk_fixed_ent_z_mean", "bk_fixed_ent_z_p90", "bk_fixed_ent_z_max",
+    "bk_rep_K", "bk_rep_feasible_rate", "bk_rep_U_mean", "bk_rep_U_max", "bk_rep_U_min",
+    "bk_rep_risk_sum", "bk_rep_ent_total", "bk_rep_ent_exposed", "bk_rep_ent_edge_pct",
+    "bk_rep_ent_z_mean", "bk_rep_ent_z_p90", "bk_rep_ent_z_max",
+
+    "tgbp_fixed_K", "tgbp_fixed_feasible_rate", "tgbp_fixed_U_mean", "tgbp_fixed_U_max", "tgbp_fixed_U_min",
+    "tgbp_fixed_risk_sum", "tgbp_fixed_ent_total", "tgbp_fixed_ent_exposed", "tgbp_fixed_ent_edge_pct",
+    "tgbp_fixed_ent_z_mean", "tgbp_fixed_ent_z_p90", "tgbp_fixed_ent_z_max",
+    "tgbp_rep_K", "tgbp_rep_feasible_rate", "tgbp_rep_U_mean", "tgbp_rep_U_max", "tgbp_rep_U_min",
+    "tgbp_rep_risk_sum", "tgbp_rep_ent_total", "tgbp_rep_ent_exposed", "tgbp_rep_ent_edge_pct",
+    "tgbp_rep_ent_z_mean", "tgbp_rep_ent_z_p90", "tgbp_rep_ent_z_max",
+
+    # timings for stages that are not run on payload-infeasible cases
+    "time_ent_ref_s", "time_lb_ref_s",
+    "time_baseline_without_qos_s", "time_baseline_with_qos_s", "time_baseline_bkmeans_s", "time_baseline_tgbp_s",
+}
+
+
+def _mask_payload_infeasible_values(df, ycol: str, y: np.ndarray) -> np.ndarray:
+    y = np.asarray(y, dtype=float).copy()
+    if ycol not in _DOWNSTREAM_INVALID_IF_PAYLOAD_INFEASIBLE:
+        return y
+    if not _has_col(df, "payload_feasible"):
+        return y
+    feasible = _col(df, "payload_feasible").astype(float, copy=False)
+    bad = np.isnan(feasible) | (feasible < 0.5)
+    if bad.shape[0] == y.shape[0]:
+        y[bad] = np.nan
+    return y
+
+
 def aggregate_by_group_mean_std(df, xcol: str, ycol: str) -> AggSeries:
     if not (_has_col(df, xcol) and _has_col(df, ycol)):
         return AggSeries(np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]))
 
     x = _col(df, xcol).astype(float, copy=False)
     y = _col(df, ycol).astype(float, copy=False)
+    y = _mask_payload_infeasible_values(df, ycol, y)
 
     xs = np.unique(x[~np.isnan(x)])
     xs = np.sort(xs)
@@ -163,7 +228,7 @@ def plot_lines_vs_nusers(
     ylabel: str,
     out_path: str | None = None,
     show: bool = False,
-    include_errorbars: bool = True,
+    include_errorbars: bool = False,
 ):
     if not series:
         return
@@ -222,6 +287,30 @@ def plot_payload_ratio_vs_nusers(df, *, title: str, out_path: str | None = None,
 # ----------------------------
 # Phase B tables
 # ----------------------------
+def _augment_with_k_theoretical_min(df):
+    """
+    Add a derived global beam-count lower bound:
+        K_lb = ceil(T_sum / W_slots)
+    This is a global time-based lower bound, not a per-satellite packing bound.
+    Returned object matches the input style (pandas DataFrame or dict of arrays).
+    """
+    if not (_has_col(df, "payload_T_sum") and _has_col(df, "payload_W_slots") and _has_col(df, "n_users")):
+        return df
+
+    T_sum = _col(df, "payload_T_sum").astype(float, copy=False)
+    W = _col(df, "payload_W_slots").astype(float, copy=False)
+    K_lb = np.ceil(T_sum / np.maximum(W, 1e-12))
+
+    if _is_pandas_df(df):
+        out = df.copy()
+        out["K_theoretical_min"] = K_lb
+        return out
+
+    out = dict(df)
+    out["K_theoretical_min"] = np.asarray(K_lb, dtype=float)
+    return out
+
+
 def _format_table_block(
     name: str,
     rows: List[Tuple[Any, ...]],
@@ -245,6 +334,16 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str):
     path = os.path.join(out_dir, "phaseB_tables.txt")
     lines: List[str] = []
     lines.append(f"PHASE B TABLES (datapoints used in plots)\nCSV: {os.path.basename(csv_path)}\n")
+    lines.append("Aggregation note: NaN values are excluded from means/min/max and from n. Downstream metrics for payload-infeasible runs are intentionally stored as NaN, not zero.")
+    lines.append("")
+    if _has_col(dfB, "theta_3db_deg"):
+        theta_vals = np.unique(_col(dfB, "theta_3db_deg").astype(float, copy=False))
+        theta_vals = theta_vals[~np.isnan(theta_vals)]
+        if theta_vals.size > 0:
+            vals = ", ".join([f"{v:.3f}" for v in theta_vals])
+            lines.append(f"Beam model note: fixed half-beamwidth angle theta_3db_deg = [{vals}] deg")
+            lines.append("Actual footprint radius is geometry-dependent: R_m = d_center * tan(theta_3db).")
+            lines.append("")
 
     def add_table(name: str, series: Dict[str, str], ylabel: str):
         rows: List[Tuple[Any, ...]] = []
@@ -260,15 +359,20 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str):
         col_widths = [8, 14, 10, 10, 8, 8, 3]
         lines.append(_format_table_block(f"{name}  (ylabel={ylabel})", rows, header, col_widths))
 
+    k_table_series = {
+        "main+qos+lb": "main_ref_lb_K",
+        "wk demand rep": "wk_demand_rep_K",
+        "wk qos rep": "wk_qos_rep_K",
+        "bk rep": "bk_rep_K",
+        "tgbp rep": "tgbp_rep_K",
+    }
+    if _has_col(dfB, "payload_T_sum") and _has_col(dfB, "payload_W_slots"):
+        dfB = _augment_with_k_theoretical_min(dfB)
+        k_table_series = {"K theoretical min": "K_theoretical_min", **k_table_series}
+
     add_table(
         "K_vs_nusers",
-        {
-            "main+qos+lb": "main_ref_lb_K",
-            "wk demand rep": "wk_demand_rep_K",
-            "wk qos rep": "wk_qos_rep_K",
-            "bk rep": "bk_rep_K",
-            "tgbp rep": "tgbp_rep_K",
-        },
+        k_table_series,
         ylabel="K",
     )
 
@@ -314,6 +418,30 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str):
             series["T_over_sum"] = "payload_T_over_sum"
         add_table("payload_overflow_vs_nusers", series, ylabel="overflow (sum)")
 
+    if _has_col(dfB, "main_ref_lb_radius_min_km"):
+        add_table(
+            "beam_radius_km_vs_nusers",
+            {
+                "beam r_min": "main_ref_lb_radius_min_km",
+                "beam r_mean": "main_ref_lb_radius_mean_km",
+                "beam r_p50": "main_ref_lb_radius_p50_km",
+                "beam r_p90": "main_ref_lb_radius_p90_km",
+                "beam r_max": "main_ref_lb_radius_max_km",
+            },
+            ylabel="beam radius (km)",
+        )
+
+    if _has_col(dfB, "main_ref_lb_sat_mean_radius_min_km"):
+        add_table(
+            "sat_mean_beam_radius_km_vs_nusers",
+            {
+                "sat mean r_min": "main_ref_lb_sat_mean_radius_min_km",
+                "sat mean r_mean": "main_ref_lb_sat_mean_radius_mean_km",
+                "sat mean r_max": "main_ref_lb_sat_mean_radius_max_km",
+            },
+            ylabel="satellite mean beam radius (km)",
+        )
+
     if _has_col(dfB, "payload_n_viol_T") or _has_col(dfB, "payload_n_viol_K"):
         series = {}
         if _has_col(dfB, "payload_n_viol_T"):
@@ -355,6 +483,13 @@ def plot_total_runtime_vs_nusers(df, out_dir: str, *, show: bool = False, use_lo
     fig = plt.figure()
     ax = plt.gca()
 
+    if _has_col(df, "payload_feasible"):
+        feasible = _col(df, "payload_feasible").astype(float, copy=False)
+        bad = np.isnan(feasible) | (feasible < 0.5)
+        if bad.shape[0] == my_total.shape[0]:
+            my_total = my_total.astype(float, copy=False)
+            my_total[bad] = np.nan
+
     tmp_my = {"n_users": _col(df, "n_users"), "my_total_s": my_total}
     agg = aggregate_by_group_mean_std(tmp_my, "n_users", "my_total_s")
     ax.plot(agg.x, agg.y_mean, marker="o", linestyle="-", label="MY algorithm total")
@@ -384,17 +519,27 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
     dfB = load_sweep_csv(phaseB_csv)
     _ensure_out_dir(out_dir)
 
+    dfB = _augment_with_k_theoretical_min(dfB)
     _write_phaseB_tables_txt(dfB, out_dir, csv_path=phaseB_csv)
+
+    k_plot_series = {
+        "K theoretical min": "K_theoretical_min",
+        "main+qos+lb": "main_ref_lb_K",
+        "wk demand rep": "wk_demand_rep_K",
+        "wk qos rep": "wk_qos_rep_K",
+        "bk rep": "bk_rep_K",
+        "tgbp rep": "tgbp_rep_K",
+    } if _has_col(dfB, "K_theoretical_min") else {
+        "main+qos+lb": "main_ref_lb_K",
+        "wk demand rep": "wk_demand_rep_K",
+        "wk qos rep": "wk_qos_rep_K",
+        "bk rep": "bk_rep_K",
+        "tgbp rep": "tgbp_rep_K",
+    }
 
     plot_lines_vs_nusers(
         dfB,
-        series={
-            "main+qos+lb": "main_ref_lb_K",
-            "wk demand rep": "wk_demand_rep_K",
-            "wk qos rep": "wk_qos_rep_K",
-            "bk rep": "bk_rep_K",
-            "tgbp rep": "tgbp_rep_K",
-        },
+        series=k_plot_series,
         title="Beams K vs n_users",
         ylabel="K",
         out_path=os.path.join(out_dir, "K_vs_nusers.png"),
@@ -427,6 +572,47 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
         show=show,
     )
 
+    if _has_col(dfB, "main_ref_lb_radius_min_km"):
+        plot_lines_vs_nusers(
+            dfB,
+            series={
+                "beam r_min": "main_ref_lb_radius_min_km",
+                "beam r_mean": "main_ref_lb_radius_mean_km",
+                "beam r_max": "main_ref_lb_radius_max_km",
+            },
+            title="Beam radius min / mean / max vs n_users",
+            ylabel="beam radius (km)",
+            out_path=os.path.join(out_dir, "beam_radius_min_mean_max_vs_nusers.png"),
+            show=show,
+        )
+
+        plot_lines_vs_nusers(
+            dfB,
+            series={
+                "beam r_p10": "main_ref_lb_radius_p10_km",
+                "beam r_p50": "main_ref_lb_radius_p50_km",
+                "beam r_p90": "main_ref_lb_radius_p90_km",
+            },
+            title="Beam radius percentiles vs n_users",
+            ylabel="beam radius (km)",
+            out_path=os.path.join(out_dir, "beam_radius_percentiles_vs_nusers.png"),
+            show=show,
+        )
+
+    if _has_col(dfB, "main_ref_lb_sat_mean_radius_min_km"):
+        plot_lines_vs_nusers(
+            dfB,
+            series={
+                "sat mean r_min": "main_ref_lb_sat_mean_radius_min_km",
+                "sat mean r_mean": "main_ref_lb_sat_mean_radius_mean_km",
+                "sat mean r_max": "main_ref_lb_sat_mean_radius_max_km",
+            },
+            title="Across-satellite mean beam radius range vs n_users",
+            ylabel="satellite mean beam radius (km)",
+            out_path=os.path.join(out_dir, "sat_mean_beam_radius_range_vs_nusers.png"),
+            show=show,
+        )
+
     plot_total_runtime_vs_nusers(dfB, out_dir, show=show, use_logy=False)
 
     # Payload plots
@@ -438,7 +624,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="feasible (0/1)",
             out_path=os.path.join(out_dir, "payload_feasible_rate_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_best_m"):
@@ -449,7 +635,17 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="m",
             out_path=os.path.join(out_dir, "payload_best_m_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
+        )
+
+        plot_lines_vs_nusers(
+            dfB,
+            series={"avg satellites used": "payload_best_m"},
+            title="Average satellites used vs n_users",
+            ylabel="satellites",
+            out_path=os.path.join(out_dir, "avg_satellites_used_vs_nusers.png"),
+            show=show,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_W_min_req"):
@@ -460,7 +656,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="W_min_req (slots)",
             out_path=os.path.join(out_dir, "payload_Wmin_req_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_T_sum") and _has_col(dfB, "payload_global_cap"):
@@ -495,7 +691,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="ratio",
             out_path=os.path.join(out_dir, "payload_Tmax_over_Tcap_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_K_max") and _has_col(dfB, "payload_K_cap"):
@@ -513,7 +709,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="ratio",
             out_path=os.path.join(out_dir, "payload_Kmax_over_Kcap_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_W_min_req") and _has_col(dfB, "payload_W_slots"):
@@ -531,7 +727,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="slots",
             out_path=os.path.join(out_dir, "payload_Wgap_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     # Repair effort curves
@@ -543,7 +739,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="moves",
             out_path=os.path.join(out_dir, "payload_repair_moves_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_moves_accepted_K") or _has_col(dfB, "payload_moves_accepted_T") or _has_col(dfB, "payload_moves_accepted_smooth"):
@@ -561,7 +757,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="accepted moves",
             out_path=os.path.join(out_dir, "payload_repair_moves_by_type_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_T_over_sum") or _has_col(dfB, "payload_K_over_sum"):
@@ -577,7 +773,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="overflow (sum across sats)",
             out_path=os.path.join(out_dir, "payload_overflow_sum_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
     if _has_col(dfB, "payload_n_viol_T") or _has_col(dfB, "payload_n_viol_K"):
@@ -593,7 +789,7 @@ def plot_phaseB(phaseB_csv: str, out_dir: str, *, show: bool = False) -> None:
             ylabel="violating sats (mean)",
             out_path=os.path.join(out_dir, "payload_viol_counts_vs_nusers.png"),
             show=show,
-            include_errorbars=True,
+            include_errorbars=False,
         )
 
 

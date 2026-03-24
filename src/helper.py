@@ -506,6 +506,19 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         if k in rec:
             row[k] = rec[k]
 
+    # Method-level payload feasibility metadata (Option B)
+    for k in [
+        "main_payload_feasible", "main_best_m",
+        "main_ref_payload_feasible", "main_ref_best_m",
+        "main_ref_lb_payload_feasible", "main_ref_lb_best_m",
+        "wk_demand_rep_payload_feasible", "wk_demand_rep_best_m",
+        "wk_qos_rep_payload_feasible", "wk_qos_rep_best_m",
+        "bk_rep_payload_feasible", "bk_rep_best_m",
+        "tgbp_rep_payload_feasible", "tgbp_rep_best_m",
+    ]:
+        if k in rec:
+            row[k] = rec[k]
+
     # Algorithm KPIs
     row |= flatten_summary("main", rec.get("main", _nan_summary()))
     row |= flatten_summary("main_ref", rec.get("main_ref", _nan_summary()))

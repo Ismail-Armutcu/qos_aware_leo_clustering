@@ -147,13 +147,14 @@ def _payload_T_from_evals(evals: list[dict]) -> float:
     return float(np.sum([float(ev.get("U", 0.0)) for ev in evals]))
 
 
-def _build_sat_piece(
+def _build_sat_piece_with_local_builder(
     users_raw,
     sat_user_ids: List[np.ndarray],
     sat_ecef_m: np.ndarray,
     s_idx: int,
     cfg: ScenarioConfig,
     prof: Profiler,
+    local_builder,
 ) -> tuple[Any | None, list[np.ndarray] | None, list[dict] | None, float]:
     user_ids = sat_user_ids[s_idx]
     if user_ids.size == 0:
@@ -163,12 +164,75 @@ def _build_sat_piece(
     if users_sat.n == 0:
         return None, None, None, 0.0
 
+    clusters, evals, _stats = local_builder(users_sat, cfg, prof)
+    T_s = _payload_T_from_evals(evals)
+    return users_sat, clusters, evals, float(T_s)
+
+
+def _local_build_main(users_sat, cfg: ScenarioConfig, prof: Profiler):
+    prof.tic("split")
+    clusters, evals = split_to_feasible(users_sat, cfg, prof=prof)
+    prof.toc("split")
+    return clusters, evals, {}
+
+
+def _local_build_main_ref(users_sat, cfg: ScenarioConfig, prof: Profiler):
     prof.tic("split")
     clusters, evals = split_to_feasible(users_sat, cfg, prof=prof)
     prof.toc("split")
 
-    T_s = _payload_T_from_evals(evals)
-    return users_sat, clusters, evals, float(T_s)
+    prof.tic("ent_ref")
+    clusters_ref, evals_ref, ref_stats = refine_enterprise_by_angle(
+        users_sat, cfg, clusters, evals,
+        n_rounds=cfg.qos_refine.rounds,
+        kcand=cfg.qos_refine.kcand,
+        max_moves_per_round=cfg.qos_refine.max_moves_per_round,
+    )
+    prof.toc("ent_ref")
+    prof.c["ent_moves_tried"] = prof.c.get("ent_moves_tried", 0) + int(ref_stats.get("moves_tried", 0))
+    prof.c["ent_moves_accepted"] = prof.c.get("ent_moves_accepted", 0) + int(ref_stats.get("moves_accepted", 0))
+    return clusters_ref, evals_ref, ref_stats
+
+
+def _local_build_main_ref_lb(users_sat, cfg: ScenarioConfig, prof: Profiler):
+    clusters_ref, evals_ref, _ = _local_build_main_ref(users_sat, cfg, prof)
+    prof.tic("lb_ref")
+    clusters_lb, evals_lb, lb_stats = refine_load_balance_by_overlap(users_sat, cfg, clusters_ref, evals_ref)
+    prof.toc("lb_ref")
+    prof.c["lb_moves_tried"] = prof.c.get("lb_moves_tried", 0) + int(lb_stats.get("moves_tried", 0))
+    prof.c["lb_moves_accepted"] = prof.c.get("lb_moves_accepted", 0) + int(lb_stats.get("moves_accepted", 0))
+    return clusters_lb, evals_lb, lb_stats
+
+
+def _local_build_wkmeans_repaired(use_qos_weight: bool):
+    cat = "baseline_with_qos" if use_qos_weight else "baseline_without_qos"
+    def _builder(users_sat, cfg: ScenarioConfig, prof: Profiler):
+        # Keep the same reference-K convention as the existing code, but recompute it locally
+        # for the current prefix and satellite user set.
+        K_ref = len(split_to_feasible(users_sat, cfg, prof=None)[0])
+        prof.tic(cat)
+        out = run_weighted_kmeans_baseline(users_sat, cfg, K_ref=K_ref, use_qos_weight=use_qos_weight)
+        prof.toc(cat)
+        rep = out["repaired"]
+        return rep["clusters"], rep["evals"], {}
+    return _builder
+
+
+def _local_build_bkmeans_repaired(users_sat, cfg: ScenarioConfig, prof: Profiler):
+    K_ref = len(split_to_feasible(users_sat, cfg, prof=None)[0])
+    prof.tic("baseline_bkmeans")
+    out = run_bkmeans_baseline(users_sat, cfg, K_hint=K_ref)
+    prof.toc("baseline_bkmeans")
+    rep = out["repaired"]
+    return rep["clusters"], rep["evals"], {}
+
+
+def _local_build_tgbp_repaired(users_sat, cfg: ScenarioConfig, prof: Profiler):
+    prof.tic("baseline_tgbp")
+    out = run_tgbp_baseline(users_sat, cfg)
+    prof.toc("baseline_tgbp")
+    rep = out["repaired"]
+    return rep["clusters"], rep["evals"], {}
 
 
 def _payload_repair_inner(
@@ -177,6 +241,7 @@ def _payload_repair_inner(
     sat_user_ids_init: List[np.ndarray],
     cfg: ScenarioConfig,
     prof: Profiler,
+    local_builder,
 ) -> tuple[bool, List[np.ndarray], dict[int, tuple[Any, list[np.ndarray], list[dict]]], dict]:
     """
     Payload feasibility with:
@@ -218,7 +283,7 @@ def _payload_repair_inner(
 
     def rebuild_sat(s: int) -> bool:
         try:
-            u, c, e, T = _build_sat_piece(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof)
+            u, c, e, T = _build_sat_piece_with_local_builder(users_raw, sat_user_ids, sat_ecef_m, s, cfg, prof, local_builder)
         except Exception:
             return False
         clusters_cache[s] = c
@@ -541,44 +606,42 @@ class _Candidate:
     m: int
     assoc: Any
     sat_user_ids: List[np.ndarray]
-    main_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]]
+    pieces_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]]
     payload_stats: dict
     feasible: bool
 
 
-def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
-    prof = Profiler()
+def _failed_candidate_key(c: _Candidate) -> tuple:
+    a = c.payload_stats
+    return (
+        1 if bool(a.get("global_impossible", False)) else 0,
+        int(a.get("n_viol_T", 0)) + int(a.get("n_viol_K", 0)),
+        float(a.get("T_over_sum", 0.0)) + float(a.get("K_over_sum", 0.0)),
+        float(max(float(a.get("T_over_max", 0.0)), float(a.get("K_over_max", 0.0)))),
+        int(c.m),
+    )
+
+
+def _run_method_with_prefix_search(
+    users_raw,
+    sat_ecef_full: np.ndarray,
+    active_sats,
+    cfg: ScenarioConfig,
+    local_builder,
+    *,
+    prof: Profiler,
+) -> tuple[_Candidate | None, float]:
+    import time
+
     ms = cfg.multisat
     pcfg = cfg.payload
-
-    prof.tic("usergen")
-    user_list = generate_users(cfg)
-    users_raw = pack_users_raw(user_list)
-    prof.toc("usergen")
-
-    verbose = bool(getattr(cfg.run, "verbose", True))
-    enable_plots = bool(getattr(cfg.run, "enable_plots", False))
-    enable_fastbp = bool(getattr(cfg.run, "enable_fastbp_baselines", True))
-
-    print_config(cfg)
-
-    t0_utc = _parse_time_utc_iso(ms.time_utc_iso) if ms.time_utc_iso else None
-
-    prof.tic("sat_select")
-    t0_utc, active_sats = sort_active_sats(cfg, t0_utc=t0_utc, n_lat_anchors=3, n_lon_anchors=3, quality_mode="sin")
-    prof.toc("sat_select")
-
-    if len(active_sats) == 0:
-        raise RuntimeError("No active satellites found above elev mask.")
-
-    sat_ecef_full = np.stack([s.ecef_m for s in active_sats], axis=0)
-
     max_prefix = int(pcfg.max_prefix) if pcfg.max_prefix is not None else int(len(active_sats))
     max_prefix = max(1, min(max_prefix, int(len(active_sats))))
 
-    best_feasible: Optional[_Candidate] = None
-    best_failed: Optional[_Candidate] = None
+    best_feasible: _Candidate | None = None
+    best_failed: _Candidate | None = None
 
+    t_start = time.perf_counter()
     for m in range(1, max_prefix + 1):
         sat_ecef_m = sat_ecef_full[:m].copy()
 
@@ -600,19 +663,20 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         sat_user_ids_init = [np.asarray(x, dtype=int) for x in assoc.sat_user_ids]
 
         if pcfg.enabled:
-            feasible, sat_user_ids_out, main_by_sat, payload_stats = _payload_repair_inner(
+            feasible, sat_user_ids_out, pieces_by_sat, payload_stats = _payload_repair_inner(
                 users_raw=users_raw,
                 sat_ecef_m=sat_ecef_m,
                 sat_user_ids_init=sat_user_ids_init,
                 cfg=cfg,
                 prof=prof,
+                local_builder=local_builder,
             )
         else:
-            main_by_sat = {}
+            pieces_by_sat = {}
             for s in range(m):
-                u, c, e, _T = _build_sat_piece(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof)
+                u, c, e, _T = _build_sat_piece_with_local_builder(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof, local_builder)
                 if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
-                    main_by_sat[s] = (u, c, e)
+                    pieces_by_sat[s] = (u, c, e)
             feasible = True
             sat_user_ids_out = sat_user_ids_init
             payload_stats = {"enabled": False, "feasible": True}
@@ -621,7 +685,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             m=m,
             assoc=assoc,
             sat_user_ids=sat_user_ids_out,
-            main_by_sat=main_by_sat,
+            pieces_by_sat=pieces_by_sat,
             payload_stats=payload_stats,
             feasible=bool(feasible),
         )
@@ -630,300 +694,110 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
             best_feasible = cand
             break
 
-        if best_failed is None:
+        if best_failed is None or _failed_candidate_key(cand) < _failed_candidate_key(best_failed):
             best_failed = cand
-        else:
-            a = best_failed.payload_stats
-            b = cand.payload_stats
-            key_a = (
-                1 if bool(a.get("global_impossible", False)) else 0,
-                int(a.get("n_viol_T", 0)) + int(a.get("n_viol_K", 0)),
-                float(a.get("T_over_sum", 0.0)) + float(a.get("K_over_sum", 0.0)),
-                float(max(float(a.get("T_over_max", 0.0)), float(a.get("K_over_max", 0.0)))),
-                int(best_failed.m),
-            )
-            key_b = (
-                1 if bool(b.get("global_impossible", False)) else 0,
-                int(b.get("n_viol_T", 0)) + int(b.get("n_viol_K", 0)),
-                float(b.get("T_over_sum", 0.0)) + float(b.get("K_over_sum", 0.0)),
-                float(max(float(b.get("T_over_max", 0.0)), float(b.get("K_over_max", 0.0)))),
-                int(cand.m),
-            )
-            if key_b < key_a:
-                best_failed = cand
 
+    runtime_s = time.perf_counter() - t_start
     chosen = best_feasible if best_feasible is not None else best_failed
-    if chosen is None:
-        raise RuntimeError("No candidate produced.")
+    return chosen, float(runtime_s)
 
-    payload_feasible = bool(chosen.feasible)
-    m_used = int(chosen.m)
 
-    if enable_plots and pcfg.enabled and isinstance(chosen.payload_stats, dict):
-        T_by = chosen.payload_stats.get("T_by_sat", None)
-        K_by = chosen.payload_stats.get("K_by_sat", None)
-        if T_by is not None and K_by is not None:
-            try:
-                plot_payload_sat_stats(
-                    T_by_sat=np.asarray(T_by, dtype=float),
-                    K_by_sat=np.asarray(K_by, dtype=int),
-                    T_cap=float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
-                    K_cap=int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
-                    J_lanes=float(pcfg.J_lanes),
-                    W_slots=int(pcfg.W_slots),
-                    title=f"Payload loads per satellite (prefix m={m_used}, feasible={payload_feasible})",
-                )
-            except Exception:
-                pass
+def _candidate_summary(cand: _Candidate | None, cfg: ScenarioConfig) -> dict[str, Any]:
+    if cand is None or (not cand.feasible):
+        return _nan_summary()
+    pieces = list(cand.pieces_by_sat.values())
+    return summarize_multisat(pieces, cfg) if pieces else _nan_summary()
 
-    pieces_main: list[tuple[Any, list[np.ndarray], list[dict]]] = [chosen.main_by_sat[s] for s in sorted(chosen.main_by_sat.keys())]
 
-    # ---- If payload infeasible: return early record with empty baselines/refinements ----
-    if not payload_feasible:
-        main_summary = summarize_multisat(pieces_main, cfg) if pieces_main else _empty_summary()
+def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
+    import time
 
-        return {
-            "seed": cfg.run.seed,
-            "region_mode": cfg.region_mode,
-            "n_users": cfg.run.n_users,
+    ms = cfg.multisat
+    pcfg = cfg.payload
+    verbose = bool(getattr(cfg.run, "verbose", True))
 
-            "use_hotspots": cfg.usergen.enabled,
-            "n_hotspots": cfg.usergen.n_hotspots,
-            "noise_frac": cfg.usergen.noise_frac,
-            "sigma_min": cfg.usergen.hotspot_sigma_m_min,
-            "sigma_max": cfg.usergen.hotspot_sigma_m_max,
+    prof_global = Profiler()
+    prof_global.tic("usergen")
+    user_list = generate_users(cfg)
+    users_raw = pack_users_raw(user_list)
+    prof_global.toc("usergen")
 
-            "rho_safe": cfg.ent.rho_safe,
-            "eirp_dbw": cfg.phy.eirp_dbw,
-            "bandwidth_hz": cfg.phy.bandwidth_hz,
-            "theta_3db_deg": cfg.beam.theta_3db_deg,
+    print_config(cfg)
 
-            "ms_tle_path": ms.tle_path,
-            "ms_time_utc": t0_utc.isoformat(),
-            "ms_elev_mask_deg": ms.elev_mask_deg,
-            "ms_n_active": int(m_used),
-            "ms_n_unserved": int(getattr(chosen.assoc, "n_unserved", 0)),
-            "ms_assoc_moves": int(getattr(chosen.assoc, "n_moves", 0)),
+    t0_utc = _parse_time_utc_iso(ms.time_utc_iso) if ms.time_utc_iso else None
 
-            "payload_enabled": bool(pcfg.enabled),
-            "payload_J_lanes": float(pcfg.J_lanes),
-            "payload_W_slots": int(pcfg.W_slots),
-            "payload_Ks_max": int(pcfg.Ks_max),
+    prof_global.tic("sat_select")
+    t0_utc, active_sats = sort_active_sats(cfg, t0_utc=t0_utc, n_lat_anchors=3, n_lon_anchors=3, quality_mode="sin")
+    prof_global.toc("sat_select")
 
-            "payload_moves_tried": int(chosen.payload_stats.get("moves_tried", 0)),
-            "payload_moves_accepted": int(chosen.payload_stats.get("moves_accepted", 0)),
-            "payload_moves_tried_K": int(chosen.payload_stats.get("moves_tried_K", 0)),
-            "payload_moves_accepted_K": int(chosen.payload_stats.get("moves_accepted_K", 0)),
-            "payload_moves_tried_T": int(chosen.payload_stats.get("moves_tried_T", 0)),
-            "payload_moves_accepted_T": int(chosen.payload_stats.get("moves_accepted_T", 0)),
-            "payload_moves_tried_smooth": int(chosen.payload_stats.get("moves_tried_smooth", 0)),
-            "payload_moves_accepted_smooth": int(chosen.payload_stats.get("moves_accepted_smooth", 0)),
+    if len(active_sats) == 0:
+        raise RuntimeError("No active satellites found above elev mask.")
 
-            "payload_feasible": False,
-            "payload_best_m": int(m_used),
+    sat_ecef_full = np.stack([s.ecef_m for s in active_sats], axis=0)
 
-            "payload_T_cap": float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
-            "payload_K_cap": int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
+    # Full pipeline for each compared method (Option B)
+    prof_main = Profiler()
+    cand_main, rt_main = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main, prof=prof_main)
 
-            "payload_n_viol_T": int(chosen.payload_stats.get("n_viol_T", 0)),
-            "payload_n_viol_K": int(chosen.payload_stats.get("n_viol_K", 0)),
-            "payload_T_over_sum": float(chosen.payload_stats.get("T_over_sum", 0.0)),
-            "payload_K_over_sum": float(chosen.payload_stats.get("K_over_sum", 0.0)),
-            "payload_T_over_max": float(chosen.payload_stats.get("T_over_max", 0.0)),
-            "payload_K_over_max": float(chosen.payload_stats.get("K_over_max", 0.0)),
+    prof_ref = Profiler()
+    cand_ref, rt_ref = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main_ref, prof=prof_ref)
 
-            "payload_T_sum": float(chosen.payload_stats.get("T_sum", 0.0)),
-            "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
-            "payload_K_sum": int(chosen.payload_stats.get("K_sum", 0)),
-            "payload_K_max": int(chosen.payload_stats.get("K_max", 0)),
-            "payload_W_min_req": int(chosen.payload_stats.get("W_min_req", 0)),
+    prof_lb = Profiler()
+    cand_lb, rt_lb = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main_ref_lb, prof=prof_lb)
 
-            "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes) * float(pcfg.W_slots))),
-            "payload_global_impossible": bool(chosen.payload_stats.get("global_impossible", False)),
+    prof_wk_d = Profiler()
+    cand_wk_d_rep, rt_wk_d = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_wkmeans_repaired(False), prof=prof_wk_d)
 
-            "main": main_summary,
-            "main_ref": _nan_summary(),
-            "main_ref_lb": _nan_summary(),
-            "wk_demand_fixed": _nan_summary(),
-            "wk_demand_rep": _nan_summary(),
-            "wk_qos_fixed": _nan_summary(),
-            "wk_qos_rep": _nan_summary(),
-            "bk_fixed": _nan_summary(),
-            "bk_rep": _nan_summary(),
-            "tgbp_fixed": _nan_summary(),
-            "tgbp_rep": _nan_summary(),
+    prof_wk_q = Profiler()
+    cand_wk_q_rep, rt_wk_q = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_wkmeans_repaired(True), prof=prof_wk_q)
 
-            "time_usergen_s": prof.t.get("usergen", 0.0),
-            "time_sat_select_s": prof.t.get("sat_select", 0.0),
-            "time_assoc_s": prof.t.get("assoc", 0.0),
-            "time_split_s": prof.t.get("split", 0.0),
-            "time_ent_ref_s": float("nan"),
-            "time_lb_ref_s": float("nan"),
+    cand_bk_rep = None
+    cand_tg_rep = None
+    rt_bk = float("nan")
+    rt_tg = float("nan")
+    if bool(getattr(cfg.run, "enable_fastbp_baselines", True)):
+        prof_bk = Profiler()
+        cand_bk_rep, rt_bk = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_bkmeans_repaired, prof=prof_bk)
+        prof_tg = Profiler()
+        cand_tg_rep, rt_tg = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_tgbp_repaired, prof=prof_tg)
+    else:
+        prof_bk = Profiler()
+        prof_tg = Profiler()
 
-            "eval_calls": prof.c.get("eval_calls", 0),
-            "n_splits": prof.c.get("n_splits", 0),
-            "ent_moves_tried": 0,
-            "ent_moves_accepted": 0,
-            "lb_moves_tried": 0,
-            "lb_moves_accepted": 0,
+    main_summary = _candidate_summary(cand_main, cfg)
+    ref_summary = _candidate_summary(cand_ref, cfg)
+    lb_summary = _candidate_summary(cand_lb, cfg)
+    wk_demand_rep = _candidate_summary(cand_wk_d_rep, cfg)
+    wk_qos_rep = _candidate_summary(cand_wk_q_rep, cfg)
+    bk_rep = _candidate_summary(cand_bk_rep, cfg)
+    tgbp_rep = _candidate_summary(cand_tg_rep, cfg)
 
-            "time_baseline_without_qos_s": float("nan"),
-            "time_baseline_with_qos_s": float("nan"),
-            "time_baseline_bkmeans_s": float("nan"),
-            "time_baseline_tgbp_s": float("nan"),
-        }
+    # Fixed-K outputs are no longer reported as payload-feasible methods under Option B.
+    wk_demand_fixed = _nan_summary()
+    wk_qos_fixed = _nan_summary()
+    bk_fixed = _nan_summary()
+    tgbp_fixed = _nan_summary()
 
-    # ---- Payload-feasible: run refinements & baselines per satellite ----
-    pieces_ref: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_lb: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-
-    pieces_wk_demand_fixed: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_wk_demand_rep: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_wk_qos_fixed: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_wk_qos_rep: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-
-    pieces_bk_fixed: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_bk_rep: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_tgbp_fixed: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-    pieces_tgbp_rep: list[tuple[Any, list[np.ndarray], list[dict]]] = []
-
-    busiest_sat_idx = 0
-    sizes = [len(x) for x in chosen.sat_user_ids]
-    if sizes:
-        busiest_sat_idx = int(np.argmax(sizes))
-
-    busiest_users = None
-    busiest_clusters = busiest_evals = None
-    busiest_clusters_ref = busiest_evals_ref = None
-    busiest_clusters_lb = busiest_evals_lb = None
-
-    sat_ecef_m = sat_ecef_full[:m_used].copy()
-    for s_idx in range(m_used):
-        user_ids = chosen.sat_user_ids[s_idx]
-        if user_ids.size == 0:
-            continue
-
-        users_sat = build_users_for_sat(users_raw, user_ids, sat_ecef_m[s_idx])
-        if users_sat.n == 0:
-            continue
-
-        prof.tic("split")
-        clusters, evals = split_to_feasible(users_sat, cfg, prof=prof)
-        prof.toc("split")
-
-        prof.tic("ent_ref")
-        clusters_ref, evals_ref, ref_stats = refine_enterprise_by_angle(
-            users_sat, cfg, clusters, evals,
-            n_rounds=cfg.qos_refine.rounds,
-            kcand=cfg.qos_refine.kcand,
-            max_moves_per_round=cfg.qos_refine.max_moves_per_round,
-        )
-        prof.toc("ent_ref")
-        prof.c["ent_moves_tried"] = prof.c.get("ent_moves_tried", 0) + int(ref_stats.get("moves_tried", 0))
-        prof.c["ent_moves_accepted"] = prof.c.get("ent_moves_accepted", 0) + int(ref_stats.get("moves_accepted", 0))
-        pieces_ref.append((users_sat, clusters_ref, evals_ref))
-
-        prof.tic("lb_ref")
-        clusters_lb, evals_lb, lb_stats = refine_load_balance_by_overlap(users_sat, cfg, clusters_ref, evals_ref)
-        prof.toc("lb_ref")
-        prof.c["lb_moves_tried"] = prof.c.get("lb_moves_tried", 0) + int(lb_stats.get("moves_tried", 0))
-        prof.c["lb_moves_accepted"] = prof.c.get("lb_moves_accepted", 0) + int(lb_stats.get("moves_accepted", 0))
-        pieces_lb.append((users_sat, clusters_lb, evals_lb))
-
-        K_ref = len(clusters)
-
-        prof.tic("baseline_without_qos")
-        base_wo = run_weighted_kmeans_baseline(users_sat, cfg, K_ref=K_ref, use_qos_weight=False)
-        prof.toc("baseline_without_qos")
-        pieces_wk_demand_fixed.append((users_sat, base_wo["fixedK"]["clusters"], base_wo["fixedK"]["evals"]))
-        pieces_wk_demand_rep.append((users_sat, base_wo["repaired"]["clusters"], base_wo["repaired"]["evals"]))
-
-        prof.tic("baseline_with_qos")
-        base_wq = run_weighted_kmeans_baseline(users_sat, cfg, K_ref=K_ref, use_qos_weight=True)
-        prof.toc("baseline_with_qos")
-        pieces_wk_qos_fixed.append((users_sat, base_wq["fixedK"]["clusters"], base_wq["fixedK"]["evals"]))
-        pieces_wk_qos_rep.append((users_sat, base_wq["repaired"]["clusters"], base_wq["repaired"]["evals"]))
-
-        if enable_fastbp:
-            prof.tic("baseline_bkmeans")
-            out_bk = run_bkmeans_baseline(users_sat, cfg, K_hint=K_ref)
-            prof.toc("baseline_bkmeans")
-            pieces_bk_fixed.append((users_sat, out_bk["fixedK"]["clusters"], out_bk["fixedK"]["evals"]))
-            pieces_bk_rep.append((users_sat, out_bk["repaired"]["clusters"], out_bk["repaired"]["evals"]))
-
-            prof.tic("baseline_tgbp")
-            out_tg = run_tgbp_baseline(users_sat, cfg)
-            prof.toc("baseline_tgbp")
-            pieces_tgbp_fixed.append((users_sat, out_tg["fixedK"]["clusters"], out_tg["fixedK"]["evals"]))
-            pieces_tgbp_rep.append((users_sat, out_tg["repaired"]["clusters"], out_tg["repaired"]["evals"]))
-
-        if s_idx == busiest_sat_idx:
-            busiest_users = users_sat
-            busiest_clusters, busiest_evals = clusters, evals
-            busiest_clusters_ref, busiest_evals_ref = clusters_ref, evals_ref
-            busiest_clusters_lb, busiest_evals_lb = clusters_lb, evals_lb
-
-    main_summary = summarize_multisat(pieces_main, cfg) if pieces_main else _empty_summary()
-    ref_summary = summarize_multisat(pieces_ref, cfg) if pieces_ref else _empty_summary()
-    lb_summary = summarize_multisat(pieces_lb, cfg) if pieces_lb else _empty_summary()
-
-    wk_demand_fixed = summarize_multisat(pieces_wk_demand_fixed, cfg) if pieces_wk_demand_fixed else _empty_summary()
-    wk_demand_rep = summarize_multisat(pieces_wk_demand_rep, cfg) if pieces_wk_demand_rep else _empty_summary()
-    wk_qos_fixed = summarize_multisat(pieces_wk_qos_fixed, cfg) if pieces_wk_qos_fixed else _empty_summary()
-    wk_qos_rep = summarize_multisat(pieces_wk_qos_rep, cfg) if pieces_wk_qos_rep else _empty_summary()
-
-    bk_fixed = summarize_multisat(pieces_bk_fixed, cfg) if pieces_bk_fixed else _empty_summary()
-    bk_rep = summarize_multisat(pieces_bk_rep, cfg) if pieces_bk_rep else _empty_summary()
-    tgbp_fixed = summarize_multisat(pieces_tgbp_fixed, cfg) if pieces_tgbp_fixed else _empty_summary()
-    tgbp_rep = summarize_multisat(pieces_tgbp_rep, cfg) if pieces_tgbp_rep else _empty_summary()
+    chosen_top = cand_lb if (cand_lb is not None and cand_lb.feasible) else (cand_ref if (cand_ref is not None and cand_ref.feasible) else cand_main)
+    payload_feasible_top = bool(chosen_top is not None and chosen_top.feasible)
+    m_used = int(chosen_top.m) if chosen_top is not None else 0
 
     if verbose:
         print_summary("Main algorithm (payload-feasible) [global]", main_summary, cfg)
-        print_summary("Main + enterprise refinement [global]", ref_summary, cfg)
-        print_summary("Main + enterprise + load-balance [global]", lb_summary, cfg)
+        print_summary("Main + enterprise refinement (payload-feasible) [global]", ref_summary, cfg)
+        print_summary("Main + enterprise + load-balance (payload-feasible) [global]", lb_summary, cfg)
+        print_summary("WKMeans++ baseline (demand) after payload certification [global]", wk_demand_rep, cfg)
+        print_summary("WKMeans++ baseline (demand*qos) after payload certification [global]", wk_qos_rep, cfg)
+        if bool(getattr(cfg.run, "enable_fastbp_baselines", True)):
+            print_summary("BK-Means baseline (payload-certified repaired) [global]", bk_rep, cfg)
+            print_summary("TGBP baseline (payload-certified repaired) [global]", tgbp_rep, cfg)
 
-        print_summary("WKMeans++ baseline (demand) [global]", wk_demand_fixed, cfg)
-        print_summary("WKMeans++ baseline (demand) after repair [global]", wk_demand_rep, cfg)
-        print_summary("WKMeans++ baseline (demand*qos) [global]", wk_qos_fixed, cfg)
-        print_summary("WKMeans++ baseline (demand*qos) after repair [global]", wk_qos_rep, cfg)
+    # Time decomposition so that time_split + time_ent_ref + time_lb_ref ~= full MY algorithm total
+    time_split_s = float(rt_main) if (cand_main is not None and cand_main.feasible) else float("nan")
+    time_ent_ref_s = float(max(0.0, rt_ref - rt_main)) if (cand_ref is not None and cand_ref.feasible and cand_main is not None and cand_main.feasible) else float("nan")
+    time_lb_ref_s = float(max(0.0, rt_lb - rt_ref)) if (cand_lb is not None and cand_lb.feasible and cand_ref is not None and cand_ref.feasible) else float("nan")
 
-        if enable_fastbp:
-            print_summary("BK-Means baseline (fixed-K) [global]", bk_fixed, cfg)
-            print_summary("BK-Means baseline (after repair) [global]", bk_rep, cfg)
-            print_summary("TGBP baseline (fixed-K) [global]", tgbp_fixed, cfg)
-            print_summary("TGBP baseline (after repair) [global]", tgbp_rep, cfg)
-
-    if enable_plots and busiest_users is not None and busiest_clusters is not None:
-        plot_clusters_overlay(
-            users_xy_m=busiest_users.xy_m,
-            qos_w=busiest_users.qos_w,
-            clusters=busiest_clusters,
-            evals=busiest_evals,
-            title=f"Busiest sat: main (K={len(busiest_clusters)})",
-            draw_circles=True,
-            draw_centers=True,
-            max_circles=250,
-        )
-        plot_clusters_overlay(
-            users_xy_m=busiest_users.xy_m,
-            qos_w=busiest_users.qos_w,
-            clusters=busiest_clusters_ref,
-            evals=busiest_evals_ref,
-            title=f"Busiest sat: main+QoS refine (K={len(busiest_clusters_ref)})",
-            draw_circles=True,
-            draw_centers=True,
-            max_circles=250,
-        )
-        plot_clusters_overlay(
-            users_xy_m=busiest_users.xy_m,
-            qos_w=busiest_users.qos_w,
-            clusters=busiest_clusters_lb,
-            evals=busiest_evals_lb,
-            title=f"Busiest sat: main+QoS+LB refine (K={len(busiest_clusters_lb)})",
-            draw_circles=True,
-            draw_centers=True,
-            max_circles=250,
-        )
+    ent_prof = prof_lb if (cand_lb is not None and cand_lb.feasible) else prof_ref
 
     return {
         "seed": cfg.run.seed,
@@ -945,75 +819,87 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
         "ms_time_utc": t0_utc.isoformat(),
         "ms_elev_mask_deg": ms.elev_mask_deg,
         "ms_n_active": int(m_used),
-        "ms_n_unserved": int(getattr(chosen.assoc, "n_unserved", 0)),
-        "ms_assoc_moves": int(getattr(chosen.assoc, "n_moves", 0)),
+        "ms_n_unserved": int(getattr(chosen_top.assoc, "n_unserved", 0)) if chosen_top is not None else 0,
+        "ms_assoc_moves": int(getattr(chosen_top.assoc, "n_moves", 0)) if chosen_top is not None else 0,
 
         "payload_enabled": bool(pcfg.enabled),
         "payload_J_lanes": float(pcfg.J_lanes),
         "payload_W_slots": int(pcfg.W_slots),
         "payload_Ks_max": int(pcfg.Ks_max),
 
-        "payload_moves_tried": int(chosen.payload_stats.get("moves_tried", 0)),
-        "payload_moves_accepted": int(chosen.payload_stats.get("moves_accepted", 0)),
-        "payload_moves_tried_K": int(chosen.payload_stats.get("moves_tried_K", 0)),
-        "payload_moves_accepted_K": int(chosen.payload_stats.get("moves_accepted_K", 0)),
-        "payload_moves_tried_T": int(chosen.payload_stats.get("moves_tried_T", 0)),
-        "payload_moves_accepted_T": int(chosen.payload_stats.get("moves_accepted_T", 0)),
-        "payload_moves_tried_smooth": int(chosen.payload_stats.get("moves_tried_smooth", 0)),
-        "payload_moves_accepted_smooth": int(chosen.payload_stats.get("moves_accepted_smooth", 0)),
+        "payload_moves_tried": int(chosen_top.payload_stats.get("moves_tried", 0)) if chosen_top is not None else 0,
+        "payload_moves_accepted": int(chosen_top.payload_stats.get("moves_accepted", 0)) if chosen_top is not None else 0,
+        "payload_moves_tried_K": int(chosen_top.payload_stats.get("moves_tried_K", 0)) if chosen_top is not None else 0,
+        "payload_moves_accepted_K": int(chosen_top.payload_stats.get("moves_accepted_K", 0)) if chosen_top is not None else 0,
+        "payload_moves_tried_T": int(chosen_top.payload_stats.get("moves_tried_T", 0)) if chosen_top is not None else 0,
+        "payload_moves_accepted_T": int(chosen_top.payload_stats.get("moves_accepted_T", 0)) if chosen_top is not None else 0,
+        "payload_moves_tried_smooth": int(chosen_top.payload_stats.get("moves_tried_smooth", 0)) if chosen_top is not None else 0,
+        "payload_moves_accepted_smooth": int(chosen_top.payload_stats.get("moves_accepted_smooth", 0)) if chosen_top is not None else 0,
 
-        "payload_feasible": True,
+        "payload_feasible": bool(payload_feasible_top),
         "payload_best_m": int(m_used),
 
-        "payload_T_cap": float(chosen.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))),
-        "payload_K_cap": int(chosen.payload_stats.get("K_cap", int(pcfg.Ks_max))),
+        "payload_T_cap": float(chosen_top.payload_stats.get("T_cap", float(pcfg.J_lanes) * float(pcfg.W_slots))) if chosen_top is not None else float(pcfg.J_lanes) * float(pcfg.W_slots),
+        "payload_K_cap": int(chosen_top.payload_stats.get("K_cap", int(pcfg.Ks_max))) if chosen_top is not None else int(pcfg.Ks_max),
 
-        "payload_n_viol_T": int(chosen.payload_stats.get("n_viol_T", 0)),
-        "payload_n_viol_K": int(chosen.payload_stats.get("n_viol_K", 0)),
-        "payload_T_over_sum": float(chosen.payload_stats.get("T_over_sum", 0.0)),
-        "payload_K_over_sum": float(chosen.payload_stats.get("K_over_sum", 0.0)),
-        "payload_T_over_max": float(chosen.payload_stats.get("T_over_max", 0.0)),
-        "payload_K_over_max": float(chosen.payload_stats.get("K_over_max", 0.0)),
+        "payload_n_viol_T": int(chosen_top.payload_stats.get("n_viol_T", 0)) if chosen_top is not None else 0,
+        "payload_n_viol_K": int(chosen_top.payload_stats.get("n_viol_K", 0)) if chosen_top is not None else 0,
+        "payload_T_over_sum": float(chosen_top.payload_stats.get("T_over_sum", 0.0)) if chosen_top is not None else 0.0,
+        "payload_K_over_sum": float(chosen_top.payload_stats.get("K_over_sum", 0.0)) if chosen_top is not None else 0.0,
+        "payload_T_over_max": float(chosen_top.payload_stats.get("T_over_max", 0.0)) if chosen_top is not None else 0.0,
+        "payload_K_over_max": float(chosen_top.payload_stats.get("K_over_max", 0.0)) if chosen_top is not None else 0.0,
+        "payload_T_sum": float(chosen_top.payload_stats.get("T_sum", 0.0)) if chosen_top is not None else 0.0,
+        "payload_T_max": float(chosen_top.payload_stats.get("T_max", 0.0)) if chosen_top is not None else 0.0,
+        "payload_K_sum": int(chosen_top.payload_stats.get("K_sum", 0)) if chosen_top is not None else 0,
+        "payload_K_max": int(chosen_top.payload_stats.get("K_max", 0)) if chosen_top is not None else 0,
+        "payload_W_min_req": int(chosen_top.payload_stats.get("W_min_req", 0)) if chosen_top is not None else 0,
+        "payload_global_cap": float(chosen_top.payload_stats.get("global_cap", 0.0)) if chosen_top is not None else 0.0,
+        "payload_global_impossible": bool(chosen_top.payload_stats.get("global_impossible", False)) if chosen_top is not None else False,
 
-        "payload_T_sum": float(chosen.payload_stats.get("T_sum", 0.0)),
-        "payload_T_max": float(chosen.payload_stats.get("T_max", 0.0)),
-        "payload_K_sum": int(chosen.payload_stats.get("K_sum", 0)),
-        "payload_K_max": int(chosen.payload_stats.get("K_max", 0)),
-        "payload_W_min_req": int(chosen.payload_stats.get("W_min_req", 0)),
+        "time_usergen_s": prof_global.t.get("usergen", 0.0),
+        "time_sat_select_s": prof_global.t.get("sat_select", 0.0),
+        "time_assoc_s": prof_lb.t.get("assoc", prof_ref.t.get("assoc", prof_main.t.get("assoc", 0.0))),
+        "time_split_s": time_split_s,
+        "time_ent_ref_s": time_ent_ref_s,
+        "time_lb_ref_s": time_lb_ref_s,
 
-        "payload_global_cap": float(chosen.payload_stats.get("global_cap", float(m_used) * float(pcfg.J_lanes) * float(pcfg.W_slots))),
-        "payload_global_impossible": bool(chosen.payload_stats.get("global_impossible", False)),
+        "eval_calls": int((prof_lb if (cand_lb is not None and cand_lb.feasible) else prof_main).c.get("eval_calls", 0)),
+        "n_splits": int((prof_lb if (cand_lb is not None and cand_lb.feasible) else prof_main).c.get("n_splits", 0)),
+        "ent_moves_tried": int(ent_prof.c.get("ent_moves_tried", 0)),
+        "ent_moves_accepted": int(ent_prof.c.get("ent_moves_accepted", 0)),
+        "lb_moves_tried": int(prof_lb.c.get("lb_moves_tried", 0)),
+        "lb_moves_accepted": int(prof_lb.c.get("lb_moves_accepted", 0)),
+
+        "time_baseline_without_qos_s": float(rt_wk_d) if (cand_wk_d_rep is not None and cand_wk_d_rep.feasible) else float("nan"),
+        "time_baseline_with_qos_s": float(rt_wk_q) if (cand_wk_q_rep is not None and cand_wk_q_rep.feasible) else float("nan"),
+        "time_baseline_bkmeans_s": float(rt_bk) if (cand_bk_rep is not None and cand_bk_rep.feasible) else float("nan"),
+        "time_baseline_tgbp_s": float(rt_tg) if (cand_tg_rep is not None and cand_tg_rep.feasible) else float("nan"),
+
+        # Method-level payload metadata
+        "main_payload_feasible": bool(cand_main is not None and cand_main.feasible),
+        "main_best_m": int(cand_main.m) if cand_main is not None else 0,
+        "main_ref_payload_feasible": bool(cand_ref is not None and cand_ref.feasible),
+        "main_ref_best_m": int(cand_ref.m) if cand_ref is not None else 0,
+        "main_ref_lb_payload_feasible": bool(cand_lb is not None and cand_lb.feasible),
+        "main_ref_lb_best_m": int(cand_lb.m) if cand_lb is not None else 0,
+        "wk_demand_rep_payload_feasible": bool(cand_wk_d_rep is not None and cand_wk_d_rep.feasible),
+        "wk_demand_rep_best_m": int(cand_wk_d_rep.m) if cand_wk_d_rep is not None else 0,
+        "wk_qos_rep_payload_feasible": bool(cand_wk_q_rep is not None and cand_wk_q_rep.feasible),
+        "wk_qos_rep_best_m": int(cand_wk_q_rep.m) if cand_wk_q_rep is not None else 0,
+        "bk_rep_payload_feasible": bool(cand_bk_rep is not None and cand_bk_rep.feasible),
+        "bk_rep_best_m": int(cand_bk_rep.m) if cand_bk_rep is not None else 0,
+        "tgbp_rep_payload_feasible": bool(cand_tg_rep is not None and cand_tg_rep.feasible),
+        "tgbp_rep_best_m": int(cand_tg_rep.m) if cand_tg_rep is not None else 0,
 
         "main": main_summary,
         "main_ref": ref_summary,
         "main_ref_lb": lb_summary,
-
         "wk_demand_fixed": wk_demand_fixed,
         "wk_demand_rep": wk_demand_rep,
         "wk_qos_fixed": wk_qos_fixed,
         "wk_qos_rep": wk_qos_rep,
-
         "bk_fixed": bk_fixed,
         "bk_rep": bk_rep,
         "tgbp_fixed": tgbp_fixed,
         "tgbp_rep": tgbp_rep,
-
-        "time_usergen_s": prof.t.get("usergen", 0.0),
-        "time_sat_select_s": prof.t.get("sat_select", 0.0),
-        "time_assoc_s": prof.t.get("assoc", 0.0),
-        "time_split_s": prof.t.get("split", 0.0),
-        "time_ent_ref_s": prof.t.get("ent_ref", 0.0),
-        "time_lb_ref_s": prof.t.get("lb_ref", 0.0),
-
-        "eval_calls": prof.c.get("eval_calls", 0),
-        "n_splits": prof.c.get("n_splits", 0),
-        "ent_moves_tried": prof.c.get("ent_moves_tried", 0),
-        "ent_moves_accepted": prof.c.get("ent_moves_accepted", 0),
-        "lb_moves_tried": prof.c.get("lb_moves_tried", 0),
-        "lb_moves_accepted": prof.c.get("lb_moves_accepted", 0),
-
-        "time_baseline_without_qos_s": prof.t.get("baseline_without_qos", 0.0),
-        "time_baseline_with_qos_s": prof.t.get("baseline_with_qos", 0.0),
-        "time_baseline_bkmeans_s": prof.t.get("baseline_bkmeans", 0.0),
-        "time_baseline_tgbp_s": prof.t.get("baseline_tgbp", 0.0),
     }

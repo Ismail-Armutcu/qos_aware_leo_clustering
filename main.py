@@ -69,44 +69,44 @@ def main():
     # -------------------------
     # Phase A: robustness sweep
     # -------------------------
-    seeds = list(range(1, 11))
-
-    configs = []
-    for s in seeds:
-        cfg = replace(
-            base,
-            region_mode="turkey",
-            run=replace(
-                base.run,
-                seed=s,
-                n_users=2500,
-                enable_plots=False,
-                verbose=False,
-                enable_fastbp_baselines = True
-            ),
-            usergen=replace(
-                base.usergen,
-                enabled=True,
-                n_hotspots=10,
-                hotspot_sigma_m_min=5_000.0,
-                hotspot_sigma_m_max=30_000.0,
-                noise_frac=0.15,
-            ),
-            lb_refine=replace(
-                base.lb_refine,
-                enabled=True
-            )
-        )
-        configs.append(cfg)
-
-    rows = run_parallel(configs, max_workers=None)
-
-    # Your flatten_run_record should already output seed; but now seed lives in cfg.run.seed
-    # Make sure your record uses cfg.run.seed (see note below).
-    rows.sort(key=lambda r: r["seed"])
-    write_csv("sweep_phaseA.csv", rows)
-    print(f"Wrote {len(rows)} runs to sweep_phaseA.csv")
-    plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
+    # seeds = list(range(1, 11))
+    #
+    # configs = []
+    # for s in seeds:
+    #     cfg = replace(
+    #         base,
+    #         region_mode="turkey",
+    #         run=replace(
+    #             base.run,
+    #             seed=s,
+    #             n_users=2500,
+    #             enable_plots=False,
+    #             verbose=False,
+    #             enable_fastbp_baselines = True
+    #         ),
+    #         usergen=replace(
+    #             base.usergen,
+    #             enabled=True,
+    #             n_hotspots=10,
+    #             hotspot_sigma_m_min=5_000.0,
+    #             hotspot_sigma_m_max=30_000.0,
+    #             noise_frac=0.15,
+    #         ),
+    #         lb_refine=replace(
+    #             base.lb_refine,
+    #             enabled=True
+    #         )
+    #     )
+    #     configs.append(cfg)
+    #
+    # rows = run_parallel(configs, max_workers=None)
+    #
+    # # Your flatten_run_record should already output seed; but now seed lives in cfg.run.seed
+    # # Make sure your record uses cfg.run.seed (see note below).
+    # rows.sort(key=lambda r: r["seed"])
+    # write_csv("sweep_phaseA.csv", rows)
+    # print(f"Wrote {len(rows)} runs to sweep_phaseA.csv")
+    # plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
 
     # -------------------------
     # Phase B: scaling sweep

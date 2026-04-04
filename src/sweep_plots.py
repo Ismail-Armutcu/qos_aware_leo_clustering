@@ -315,13 +315,38 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str) -> None:
     }
     lines.append(_format_table_block("K_vs_nusers", _series_table_rows(dfB, "K_vs_nusers", k_series)))
 
-    # Ablation tables
-    ablation_u = {
-        "main": "main_U_max",
-        "main+qos": "main_ref_U_max",
-        "main+qos+lb": "main_ref_lb_U_max",
+    # Rigid fixed-prefix ablation tables
+    ab_feas = {
+        "A0 pure+split": "ab_A0_payload_feasible",
+        "A1 bal+split": "ab_A1_payload_feasible",
+        "A2 bal+split+qos": "ab_A2_payload_feasible",
+        "A3 bal+split+qos+lb": "ab_A3_payload_feasible",
     }
-    lines.append(_format_table_block("ablation_Umax_vs_nusers", _series_table_rows(dfB, "ablation_Umax_vs_nusers", ablation_u)))
+    lines.append(_format_table_block("ablation_feasible_rate_vs_nusers", _series_table_rows(dfB, "ablation_feasible_rate_vs_nusers", ab_feas)))
+
+    ab_k = {
+        "A0 pure+split": "ab_A0_pure_split_K",
+        "A1 bal+split": "ab_A1_bal_split_K",
+        "A2 bal+split+qos": "ab_A2_bal_split_qos_K",
+        "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_K",
+    }
+    lines.append(_format_table_block("ablation_K_vs_nusers", _series_table_rows(dfB, "ablation_K_vs_nusers", ab_k)))
+
+    ab_umax = {
+        "A0 pure+split": "ab_A0_pure_split_U_max",
+        "A1 bal+split": "ab_A1_bal_split_U_max",
+        "A2 bal+split+qos": "ab_A2_bal_split_qos_U_max",
+        "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_U_max",
+    }
+    lines.append(_format_table_block("ablation_Umax_vs_nusers", _series_table_rows(dfB, "ablation_Umax_vs_nusers", ab_umax)))
+
+    ab_rt = {
+        "A0 pure+split": "time_ab_A0_s",
+        "A1 bal+split": "time_ab_A1_s",
+        "A2 bal+split+qos": "time_ab_A2_s",
+        "A3 bal+split+qos+lb": "time_ab_A3_s",
+    }
+    lines.append(_format_table_block("ablation_runtime_vs_nusers", _series_table_rows(dfB, "ablation_runtime_vs_nusers", ab_rt)))
 
     # Enterprise exposure
     ent_series = {
@@ -396,7 +421,6 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
     plot_lines_vs_nusers(
         df,
         {
-            "K theoretical min": "K_theoretical_min",
             "main+qos+lb": "main_ref_lb_K",
             "bk rep": "bk_rep_K",
             "tgbp rep": "tgbp_rep_K",
@@ -439,21 +463,68 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 4) Ablation: Umax improvement
+    # 4) Rigid fixed-prefix ablation: feasible rate
     plot_lines_vs_nusers(
         df,
         {
-            "main": "main_U_max",
-            "main+qos": "main_ref_U_max",
-            "main+qos+lb": "main_ref_lb_U_max",
+            "A0 pure+split": "ab_A0_payload_feasible",
+            "A1 bal+split": "ab_A1_payload_feasible",
+            "A2 bal+split+qos": "ab_A2_payload_feasible",
+            "A3 bal+split+qos+lb": "ab_A3_payload_feasible",
         },
-        title="Ablation: peak utilization",
+        title="Ablation: feasible rate under fixed prefix",
+        ylabel="feasible rate",
+        out_path=os.path.join(out_dir, "ablation_feasible_rate_vs_nusers.png"),
+        show=show,
+    )
+
+    # 5) Rigid fixed-prefix ablation: beam count
+    plot_lines_vs_nusers(
+        df,
+        {
+            "A0 pure+split": "ab_A0_pure_split_K",
+            "A1 bal+split": "ab_A1_bal_split_K",
+            "A2 bal+split+qos": "ab_A2_bal_split_qos_K",
+            "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_K",
+        },
+        title="Ablation: beam count under fixed prefix",
+        ylabel="K",
+        out_path=os.path.join(out_dir, "ablation_K_vs_nusers.png"),
+        show=show
+    )
+
+    # 6) Rigid fixed-prefix ablation: Umax
+    plot_lines_vs_nusers(
+        df,
+        {
+            "A0 pure+split": "ab_A0_pure_split_U_max",
+            "A1 bal+split": "ab_A1_bal_split_U_max",
+            "A2 bal+split+qos": "ab_A2_bal_split_qos_U_max",
+            "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_U_max",
+        },
+        title="Ablation: peak utilization under fixed prefix",
         ylabel="U_max",
         out_path=os.path.join(out_dir, "ablation_Umax_vs_nusers.png"),
         show=show,
     )
 
-    # 5) System-level association comparison: K
+    # 7) Rigid fixed-prefix ablation: runtime
+    plot_lines_vs_nusers(
+        df,
+        {
+            "A0 pure+split": "time_ab_A0_s",
+            "A1 bal+split": "time_ab_A1_s",
+            "A2 bal+split+qos": "time_ab_A2_s",
+            "A3 bal+split+qos+lb": "time_ab_A3_s",
+        },
+        title="Ablation: runtime under fixed prefix",
+        ylabel="runtime (s)",
+        out_path=os.path.join(out_dir, "ablation_runtime_vs_nusers.png"),
+        show=show,
+        y_log=True,
+    )
+
+    # 8) System-level association comparison: K
     plot_lines_vs_nusers(
         df,
         {

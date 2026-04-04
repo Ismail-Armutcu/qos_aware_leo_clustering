@@ -409,6 +409,10 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "time_sys_pure_max_elev_s": rec.get("time_sys_pure_max_elev_s", float("nan")),
         "time_sys_balanced_max_elev_s": rec.get("time_sys_balanced_max_elev_s", float("nan")),
         "time_sys_max_service_time_s": rec.get("time_sys_max_service_time_s", float("nan")),
+        "time_ab_A0_s": rec.get("time_ab_A0_s", float("nan")),
+        "time_ab_A1_s": rec.get("time_ab_A1_s", float("nan")),
+        "time_ab_A2_s": rec.get("time_ab_A2_s", float("nan")),
+        "time_ab_A3_s": rec.get("time_ab_A3_s", float("nan")),
         "eval_calls": rec.get("eval_calls", 0),
         "n_splits": rec.get("n_splits", 0),
         "ent_moves_tried": rec.get("ent_moves_tried", 0),
@@ -471,6 +475,7 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "tgbp_rep_payload_feasible",
         "tgbp_rep_best_m",
         "sys_assoc_fixed_prefix_m",
+        "ablation_fixed_prefix_m",
         "sys_pure_max_elev_payload_feasible",
         "sys_pure_max_elev_best_m",
         "sys_pure_max_elev_assoc_moves",
@@ -483,6 +488,22 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
         "sys_max_service_time_best_m",
         "sys_max_service_time_assoc_moves",
         "sys_max_service_time_n_unserved",
+        "ab_A0_payload_feasible",
+        "ab_A0_best_m",
+        "ab_A0_assoc_moves",
+        "ab_A0_n_unserved",
+        "ab_A1_payload_feasible",
+        "ab_A1_best_m",
+        "ab_A1_assoc_moves",
+        "ab_A1_n_unserved",
+        "ab_A2_payload_feasible",
+        "ab_A2_best_m",
+        "ab_A2_assoc_moves",
+        "ab_A2_n_unserved",
+        "ab_A3_payload_feasible",
+        "ab_A3_best_m",
+        "ab_A3_assoc_moves",
+        "ab_A3_n_unserved",
     ]:
         if k in rec:
             row[k] = rec[k]
@@ -502,6 +523,10 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
     row |= flatten_summary("sys_pure_max_elev", rec.get("sys_pure_max_elev", _nan_summary()))
     row |= flatten_summary("sys_balanced_max_elev", rec.get("sys_balanced_max_elev", _nan_summary()))
     row |= flatten_summary("sys_max_service_time", rec.get("sys_max_service_time", _nan_summary()))
+    row |= flatten_summary("ab_A0_pure_split", rec.get("ab_A0_pure_split", _nan_summary()))
+    row |= flatten_summary("ab_A1_bal_split", rec.get("ab_A1_bal_split", _nan_summary()))
+    row |= flatten_summary("ab_A2_bal_split_qos", rec.get("ab_A2_bal_split_qos", _nan_summary()))
+    row |= flatten_summary("ab_A3_bal_split_qos_lb", rec.get("ab_A3_bal_split_qos_lb", _nan_summary()))
 
     return row
 

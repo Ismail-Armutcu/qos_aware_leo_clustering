@@ -1018,6 +1018,39 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
    )
    print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb assoc_rule: max_service_time fixed_m: {sys_fixed_m}")
 
+   # Rigid fixed-prefix ablation chain:
+   # A0 = pure max elev + split only
+   # A1 = balanced max elev + split only
+   # A2 = balanced max elev + split + QoS refine
+   # A3 = balanced max elev + split + QoS refine + LB refine
+   ab_fixed_m = int(sys_fixed_m)
+
+   prof_ab_A0 = Profiler()
+   cand_ab_A0, rt_ab_A0 = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main,
+       m_fixed=ab_fixed_m, assoc_rule="pure_max_elev", prof=prof_ab_A0,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} ablation: A0 pure_max_elev + split fixed_m: {ab_fixed_m}")
+
+   prof_ab_A1 = Profiler()
+   cand_ab_A1, rt_ab_A1 = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main,
+       m_fixed=ab_fixed_m, assoc_rule="balanced_max_elev", prof=prof_ab_A1,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} ablation: A1 balanced_max_elev + split fixed_m: {ab_fixed_m}")
+
+   prof_ab_A2 = Profiler()
+   cand_ab_A2, rt_ab_A2 = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main_ref,
+       m_fixed=ab_fixed_m, assoc_rule="balanced_max_elev", prof=prof_ab_A2,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} ablation: A2 balanced_max_elev + split + qos fixed_m: {ab_fixed_m}")
+
+   # A3 is identical to the balanced fixed-prefix system comparison above.
+   prof_ab_A3 = prof_sys_bal
+   cand_ab_A3 = cand_sys_bal
+   rt_ab_A3 = rt_sys_bal
+
 
    prof_wk_d = Profiler()
    cand_wk_d_rep, rt_wk_d = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_wkmeans_repaired(False), assoc_rule="balanced_max_elev", prof=prof_wk_d)
@@ -1055,6 +1088,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
    sys_pure_summary = _candidate_summary(cand_sys_pure, cfg)
    sys_balanced_summary = _candidate_summary(cand_sys_bal, cfg)
    sys_service_time_summary = _candidate_summary(cand_sys_dur, cfg)
+   ab_A0_summary = _candidate_summary(cand_ab_A0, cfg)
+   ab_A1_summary = _candidate_summary(cand_ab_A1, cfg)
+   ab_A2_summary = _candidate_summary(cand_ab_A2, cfg)
+   ab_A3_summary = _candidate_summary(cand_ab_A3, cfg)
    wk_demand_rep = _candidate_summary(cand_wk_d_rep, cfg)
    wk_qos_rep = _candidate_summary(cand_wk_q_rep, cfg)
    bk_rep = _candidate_summary(cand_bk_rep, cfg)
@@ -1079,6 +1116,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        print_summary(f"System compare: pure max-elevation @ fixed prefix m={sys_fixed_m}", sys_pure_summary, cfg)
        print_summary(f"System compare: balanced max-elevation @ fixed prefix m={sys_fixed_m}", sys_balanced_summary, cfg)
        print_summary(f"System compare: max-service-time @ fixed prefix m={sys_fixed_m}", sys_service_time_summary, cfg)
+       print_summary(f"Ablation A0: pure max-elev + split @ fixed prefix m={ab_fixed_m}", ab_A0_summary, cfg)
+       print_summary(f"Ablation A1: balanced max-elev + split @ fixed prefix m={ab_fixed_m}", ab_A1_summary, cfg)
+       print_summary(f"Ablation A2: balanced max-elev + split + qos @ fixed prefix m={ab_fixed_m}", ab_A2_summary, cfg)
+       print_summary(f"Ablation A3: balanced max-elev + split + qos + lb @ fixed prefix m={ab_fixed_m}", ab_A3_summary, cfg)
        print_summary("WKMeans++ baseline (demand) after payload certification [global]", wk_demand_rep, cfg)
        print_summary("WKMeans++ baseline (demand*qos) after payload certification [global]", wk_qos_rep, cfg)
        if bool(getattr(cfg.run, "enable_fastbp_baselines", True)):
@@ -1169,6 +1210,10 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        "time_sys_pure_max_elev_s": float(rt_sys_pure),
        "time_sys_balanced_max_elev_s": float(rt_sys_bal),
        "time_sys_max_service_time_s": float(rt_sys_dur),
+       "time_ab_A0_s": float(rt_ab_A0),
+       "time_ab_A1_s": float(rt_ab_A1),
+       "time_ab_A2_s": float(rt_ab_A2),
+       "time_ab_A3_s": float(rt_ab_A3),
 
 
        "eval_calls": int((prof_lb if (cand_lb is not None and cand_lb.feasible) else prof_main).c.get("eval_calls", 0)),
@@ -1203,6 +1248,7 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
        # New system-level fixed-prefix association comparison metadata
        "sys_assoc_fixed_prefix_m": int(sys_fixed_m),
+       "ablation_fixed_prefix_m": int(ab_fixed_m),
        "sys_pure_max_elev_payload_feasible": bool(cand_sys_pure is not None and cand_sys_pure.feasible),
        "sys_pure_max_elev_best_m": int(cand_sys_pure.m) if cand_sys_pure is not None else 0,
        "sys_pure_max_elev_assoc_moves": int(getattr(cand_sys_pure.assoc, "n_moves", 0)) if cand_sys_pure is not None else 0,
@@ -1216,12 +1262,33 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        "sys_max_service_time_assoc_moves": int(getattr(cand_sys_dur.assoc, "n_moves", 0)) if cand_sys_dur is not None else 0,
        "sys_max_service_time_n_unserved": int(getattr(cand_sys_dur.assoc, "n_unserved", 0)) if cand_sys_dur is not None else 0,
 
+       "ab_A0_payload_feasible": bool(cand_ab_A0 is not None and cand_ab_A0.feasible),
+       "ab_A0_best_m": int(cand_ab_A0.m) if cand_ab_A0 is not None else 0,
+       "ab_A0_assoc_moves": int(getattr(cand_ab_A0.assoc, "n_moves", 0)) if cand_ab_A0 is not None else 0,
+       "ab_A0_n_unserved": int(getattr(cand_ab_A0.assoc, "n_unserved", 0)) if cand_ab_A0 is not None else 0,
+       "ab_A1_payload_feasible": bool(cand_ab_A1 is not None and cand_ab_A1.feasible),
+       "ab_A1_best_m": int(cand_ab_A1.m) if cand_ab_A1 is not None else 0,
+       "ab_A1_assoc_moves": int(getattr(cand_ab_A1.assoc, "n_moves", 0)) if cand_ab_A1 is not None else 0,
+       "ab_A1_n_unserved": int(getattr(cand_ab_A1.assoc, "n_unserved", 0)) if cand_ab_A1 is not None else 0,
+       "ab_A2_payload_feasible": bool(cand_ab_A2 is not None and cand_ab_A2.feasible),
+       "ab_A2_best_m": int(cand_ab_A2.m) if cand_ab_A2 is not None else 0,
+       "ab_A2_assoc_moves": int(getattr(cand_ab_A2.assoc, "n_moves", 0)) if cand_ab_A2 is not None else 0,
+       "ab_A2_n_unserved": int(getattr(cand_ab_A2.assoc, "n_unserved", 0)) if cand_ab_A2 is not None else 0,
+       "ab_A3_payload_feasible": bool(cand_ab_A3 is not None and cand_ab_A3.feasible),
+       "ab_A3_best_m": int(cand_ab_A3.m) if cand_ab_A3 is not None else 0,
+       "ab_A3_assoc_moves": int(getattr(cand_ab_A3.assoc, "n_moves", 0)) if cand_ab_A3 is not None else 0,
+       "ab_A3_n_unserved": int(getattr(cand_ab_A3.assoc, "n_unserved", 0)) if cand_ab_A3 is not None else 0,
+
        "main": main_summary,
        "main_ref": ref_summary,
        "main_ref_lb": lb_summary,
        "sys_pure_max_elev": sys_pure_summary,
        "sys_balanced_max_elev": sys_balanced_summary,
        "sys_max_service_time": sys_service_time_summary,
+       "ab_A0_pure_split": ab_A0_summary,
+       "ab_A1_bal_split": ab_A1_summary,
+       "ab_A2_bal_split_qos": ab_A2_summary,
+       "ab_A3_bal_split_qos_lb": ab_A3_summary,
        "wk_demand_fixed": wk_demand_fixed,
        "wk_demand_rep": wk_demand_rep,
        "wk_qos_fixed": wk_qos_fixed,

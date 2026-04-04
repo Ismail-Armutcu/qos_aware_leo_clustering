@@ -108,12 +108,40 @@ class RunConfig:
 # Multi-satellite snapshot config
 # -----------------------------
 @dataclass(frozen=True)
+class WalkerConfig:
+    # Walker-delta parameters: T / P / F
+    total_sats: int = 144
+    n_planes: int = 12
+    phasing: int = 1
+
+    # Orbital parameters
+    inclination_deg: float = 53.0
+    altitude_m: float = 600_000.0
+
+    # Reference epoch at which the Walker mean anomalies are defined.
+    # If multisat.time_utc_iso is not provided, this epoch is also used as
+    # the default snapshot time for deterministic runs.
+    epoch_utc_iso: str = "2026-01-01T00:00:00Z"
+
+
+@dataclass(frozen=True)
 class MultiSatConfig:
+    # Satellite source: real TLEs or synthetic Walker-delta constellation.
+    source: Literal["tle", "walker"] = "tle"
+
+    # TLE source configuration (used when source == "tle")
     tle_path: str = "starlink.tle"
+
+    # Synthetic Walker-delta configuration (used when source == "walker")
+    walker: WalkerConfig = WalkerConfig()
+
     elev_mask_deg: float = 25.0
 
     # Optional fixed snapshot time for reproducibility (ISO string)
     # Example: "2026-01-29T16:19:56Z"
+    # - TLE mode   : selects the snapshot instant used for propagation.
+    # - Walker mode: selects the instant to which the synthetic constellation
+    #                is propagated from walker.epoch_utc_iso.
     time_utc_iso: Optional[str] = None
 
     # Reference point (kept for compatibility)

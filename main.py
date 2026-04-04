@@ -111,33 +111,35 @@ def main():
     # -------------------------
     # Phase B: scaling sweep
     # -------------------------
-    # n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
-    # seeds_b = list(range(1, 6))
-    #
-    # configs_b = []
-    # for n in n_users_list:
-    #     for s in seeds_b:
-    #         cfg = replace(
-    #             base,
-    #             region_mode="turkey",
-    #             run=replace(
-    #                 base.run,
-    #                 seed=s,
-    #                 n_users=n,
-    #                 enable_plots=False,
-    #                 verbose=False,
-    #                 enable_fastbp_baselines=True
-    #             ),
-    #             # keep the same user generator settings as base (or set explicitly if you want)
-    #             # usergen=replace(base.usergen, enabled=True, ...)
-    #         )
-    #         configs_b.append(cfg)
-    #
-    # rows_b = run_parallel(configs_b, max_workers=None)
-    # rows_b.sort(key=lambda r: (r["n_users"], r["seed"]))
-    # write_csv("sweep_phaseB.csv", rows_b)
-    # print(f"Wrote {len(rows_b)} runs to sweep_phaseB.csv")
-    # plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
+    #n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
+
+    n_users_list = [1000, 2500, 5000]
+    seeds_b = list(range(1, 6))
+
+    configs_b = []
+    for n in n_users_list:
+        for s in seeds_b:
+            cfg = replace(
+                base,
+                region_mode="turkey",
+                run=replace(
+                    base.run,
+                    seed=s,
+                    n_users=n,
+                    enable_plots=False,
+                    verbose=False,
+                    enable_fastbp_baselines=True
+                ),
+                # keep the same user generator settings as base (or set explicitly if you want)
+                # usergen=replace(base.usergen, enabled=True, ...)
+            )
+            configs_b.append(cfg)
+
+    rows_b = run_parallel(configs_b, max_workers=None)
+    rows_b.sort(key=lambda r: (r["n_users"], r["seed"]))
+    write_csv("sweep_phaseB.csv", rows_b)
+    print(f"Wrote {len(rows_b)} runs to sweep_phaseB.csv")
+    plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
 
 if __name__ == "__main__":
     mp.freeze_support()

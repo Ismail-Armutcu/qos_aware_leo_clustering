@@ -7,10 +7,19 @@ from typing import List, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 
-from src.coords import unit
+from src.coords import llh_to_ecef, unit
 
 if TYPE_CHECKING:
     from config import ScenarioConfig, BBox
+
+
+# -----------------------------
+# Constants
+# -----------------------------
+EARTH_RADIUS_M = 6_371_000.0
+MU_EARTH_M3_S2 = 3.986004418e14
+SIDEREAL_DAY_S = 86164.0905
+EARTH_ROT_RATE_RAD_S = 2.0 * np.pi / SIDEREAL_DAY_S
 
 
 # -----------------------------
@@ -21,7 +30,7 @@ class ActiveSat:
     """Active satellite at a given instant (snapshot)."""
     name: str
     ecef_m: np.ndarray   # (3,)
-    elev_ref_deg: float  # DEBUG: max elevation across anchors (not a single reference site)
+    elev_ref_deg: float  # max elevation across anchors
 
 
 @dataclass(frozen=True)
@@ -55,22 +64,24 @@ def _parse_utc_iso(iso_z: str) -> datetime:
         s = s[:-1] + "+00:00"
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:
-        # Interpret naive as UTC
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
 def _choose_snapshot_time_utc(sats: Sequence[object]) -> datetime:
     """
-    Deterministic snapshot selection: midpoint of TLE epoch span (UTC).
+    Deterministic snapshot selection for TLE mode: midpoint of TLE epoch span (UTC).
     """
     epochs = [sat.epoch.utc_datetime() for sat in sats]
     t_min = min(epochs)
     t_max = max(epochs)
-    t0 = t_min + (t_max - t_min) / 2
-    if t0.tzinfo is None:
-        return t0.replace(tzinfo=timezone.utc)
-    return t0.astimezone(timezone.utc)
+    return _normalize_utc(t_min + (t_max - t_min) / 2)
 
 
 def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anchor]:
@@ -90,14 +101,16 @@ def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anc
     return anchors
 
 
+def _anchors_to_ecef_m(anchors: Sequence[Anchor]) -> np.ndarray:
+    lat = np.array([a.lat_deg for a in anchors], dtype=float)
+    lon = np.array([a.lon_deg for a in anchors], dtype=float)
+    h = np.array([a.height_m for a in anchors], dtype=float)
+    return np.asarray(llh_to_ecef(lat, lon, h), dtype=float)
+
+
 def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "sin") -> np.ndarray:
     """
-    Convert elevation (deg) to a nonnegative "quality" q, with q=0 below mask.
-
-    mode:
-      - "sin":    q = sin(e)
-      - "sin2":   q = sin(e)^2 (penalizes low elevation more)
-      - "linear": q = e (deg)
+    Convert elevation (deg) to a nonnegative quality, with q=0 below mask.
     """
     q = np.zeros_like(elev_deg, dtype=np.float64)
     mask = elev_deg >= float(emin_deg)
@@ -116,47 +129,131 @@ def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "s
     return q
 
 
-# -----------------------------
-# New satellite selection API
-# -----------------------------
-def sort_active_sats(
+def _walker_mean_motion_rad_s(altitude_m: float) -> float:
+    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
+    return float(np.sqrt(MU_EARTH_M3_S2 / (r_orbit_m ** 3)))
+
+
+def _walker_delta_elements(total_sats: int, n_planes: int, phasing: int, inc_deg: float) -> list[tuple[str, float, float, float]]:
+    """
+    Walker-delta constellation definition.
+
+    Returns a list of tuples: (name, RAAN_rad, inc_rad, M0_rad)
+    """
+    T = int(total_sats)
+    P = int(n_planes)
+    F = int(phasing)
+    if T <= 0 or P <= 0:
+        raise ValueError("Walker parameters must satisfy total_sats > 0 and n_planes > 0.")
+    if T % P != 0:
+        raise ValueError(f"Walker-delta requires total_sats divisible by n_planes, got T={T}, P={P}.")
+
+    sats_per_plane = T // P
+    inc = float(np.deg2rad(inc_deg))
+    elems: list[tuple[str, float, float, float]] = []
+    for p in range(P):
+        raan = 2.0 * np.pi * p / P
+        for s in range(sats_per_plane):
+            M0 = 2.0 * np.pi * s / sats_per_plane + 2.0 * np.pi * F * p / T
+            elems.append((f"WALKER-P{p:02d}-S{s:02d}", float(raan), inc, float(M0)))
+    return elems
+
+
+def _walker_sat_ecef_m(raan_rad: float, inc_rad: float, M0_rad: float, dt_s: float, altitude_m: float) -> np.ndarray:
+    """
+    Circular-orbit Walker satellite propagated from the reference epoch into ECEF.
+    """
+    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
+    n = _walker_mean_motion_rad_s(altitude_m)
+    u = float(M0_rad + n * dt_s)
+
+    cosO = float(np.cos(raan_rad))
+    sinO = float(np.sin(raan_rad))
+    cosi = float(np.cos(inc_rad))
+    sini = float(np.sin(inc_rad))
+    cosu = float(np.cos(u))
+    sinu = float(np.sin(u))
+
+    x_eci = r_orbit_m * (cosO * cosu - sinO * sinu * cosi)
+    y_eci = r_orbit_m * (sinO * cosu + cosO * sinu * cosi)
+    z_eci = r_orbit_m * (sinu * sini)
+
+    theta = EARTH_ROT_RATE_RAD_S * float(dt_s)
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+
+    x_ecef = c * x_eci + s * y_eci
+    y_ecef = -s * x_eci + c * y_eci
+    return np.array([x_ecef, y_ecef, z_eci], dtype=float)
+
+
+def _rank_visible_sats(
+    sat_names: Sequence[str],
+    sat_ecef_m: np.ndarray,
+    anchor_ecef_m: np.ndarray,
+    emin_deg: float,
+    quality_mode: str = "sin",
+) -> List[ActiveSat]:
+    """
+    Common ranking logic for both TLE and Walker sources.
+    """
+    if sat_ecef_m.size == 0:
+        return []
+
+    elev = _elevations_deg(anchor_ecef_m, sat_ecef_m).astype(np.float64)  # (P, N)
+    cand_mask = (elev >= float(emin_deg)).any(axis=0)
+    cand_idx = np.where(cand_mask)[0]
+    if cand_idx.size == 0:
+        return []
+
+    elev_c = elev[:, cand_idx]
+    q = _quality_from_elev_deg(elev_c, emin_deg=float(emin_deg), mode=quality_mode)
+
+    Mc = q.shape[1]
+    best = np.zeros(q.shape[0], dtype=np.float64)
+    chosen = np.zeros(Mc, dtype=bool)
+    order_local: List[int] = []
+
+    while True:
+        improvement = np.maximum(q - best[:, None], 0.0)
+        delta = improvement.sum(axis=0)
+        delta[chosen] = -1.0
+        j = int(np.argmax(delta))
+        if delta[j] <= 0.0:
+            break
+        chosen[j] = True
+        order_local.append(j)
+        best = np.maximum(best, q[:, j])
+
+    remaining = np.where(~chosen)[0]
+    if remaining.size > 0:
+        rem_score = q[:, remaining].sum(axis=0)
+        rem_order = remaining[np.argsort(-rem_score, kind="mergesort")]
+        order_local.extend(rem_order.tolist())
+
+    selected_sat_idx = cand_idx[np.array(order_local, dtype=int)]
+
+    active: List[ActiveSat] = []
+    for si in selected_sat_idx:
+        active.append(
+            ActiveSat(
+                name=str(sat_names[int(si)]),
+                ecef_m=np.asarray(sat_ecef_m[int(si)], dtype=float),
+                elev_ref_deg=float(elev[:, int(si)].max()),
+            )
+        )
+    return active
+
+
+def _sort_active_sats_from_tle(
     scenarioConfig: "ScenarioConfig",
     *,
-    t0_utc: Optional[datetime] = None,
-    n_lat_anchors: int = 3,
-    n_lon_anchors: int = 3,
-    quality_mode: str = "sin",
+    t0_utc: Optional[datetime],
+    n_lat_anchors: int,
+    n_lon_anchors: int,
+    quality_mode: str,
 ) -> tuple[datetime, List[ActiveSat]]:
-    """
-    Load a TLE file, choose a snapshot time t0, then select active satellites using:
-
-      (1) Multi-anchor visibility filter:
-          keep satellites visible (elev >= mask) at ANY anchor over the region bbox.
-
-      (2) Greedy marginal-gain ordering (anchors only):
-          iteratively pick satellites that maximize the additional anchor quality
-          not already provided by the selected set.
-
-    Returns
-    -------
-    (t0_utc, active_sats)
-      - t0_utc: UTC timezone-aware datetime
-      - active_sats: List[ActiveSat] containing all satellites that are
-        visible above the elevation mask at at least one anchor. The list is
-        ordered first by greedy positive marginal anchor-quality gain, then by
-        a fallback anchor-quality score for the remaining visible satellites.
-
-    Notes
-    -----
-    - This fully replaces the old reference-site elevation sorting logic.
-    - This function no longer truncates the returned list using
-      scenarioConfig.multisat.n_active. Prefix-search depth should be limited
-      via scenarioConfig.payload.max_prefix.
-    - 'elev_ref_deg' is kept for compatibility but now stores the MAX elevation
-      across anchors.
-    """
-    # Skyfield import inside to keep the rest of the project usable without it.
-    from skyfield.api import load, wgs84
+    from skyfield.api import load
     from skyfield.framelib import itrs
 
     tle_path = scenarioConfig.multisat.tle_path
@@ -168,91 +265,111 @@ def sort_active_sats(
     if len(sats) == 0:
         raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
 
-    # Snapshot time
     if t0_utc is not None:
-        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
+        t0 = _normalize_utc(t0_utc)
     elif scenarioConfig.multisat.time_utc_iso is not None:
         t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
     else:
         t0 = _choose_snapshot_time_utc(sats)
 
     t = ts.from_datetime(t0)
+    sat_names = [sat.name for sat in sats]
+    sat_ecef_m = np.stack(
+        [np.asarray(sat.at(t).frame_xyz(itrs).km, dtype=float) * 1000.0 for sat in sats],
+        axis=0,
+    )
 
-    # Anchors over region
     anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
-    P = len(anchors)
-    N = len(sats)
-
-    # Pre-create anchor observer objects
-    obs = [wgs84.latlon(a.lat_deg, a.lon_deg, elevation_m=a.height_m) for a in anchors]
-
-    # Elevation matrix: elev[p, s]
-    elev = np.empty((P, N), dtype=np.float32)
-    for si, sat in enumerate(sats):
-        for pi, o in enumerate(obs):
-            alt, _, _ = (sat - o).at(t).altaz()
-            elev[pi, si] = float(alt.degrees)
-
-    # (1) Multi-anchor visibility filter: visible at ANY anchor
-    cand_mask = (elev >= emin_deg).any(axis=0)
-    cand_idx = np.where(cand_mask)[0]
-    if cand_idx.size == 0:
-        return t0, []
-
-    elev_c = elev[:, cand_idx].astype(np.float64)  # (P, Mc)
-
-    # Anchor quality q[p, j]
-    q = _quality_from_elev_deg(elev_c, emin_deg=emin_deg, mode=quality_mode)
-
-    # (2) Greedy ordering over all visible candidates
-    #
-    # Phase A: keep selecting satellites that provide positive marginal anchor
-    #          quality gain. This preserves the current strong-front ordering.
-    # Phase B: append the remaining visible satellites in a fallback order
-    #          instead of truncating the list. This makes sort_active_sats() a
-    #          ranking function, while scenarioConfig.payload.max_prefix remains
-    #          the runtime/search cap in the outer prefix loop.
-    Mc = q.shape[1]
-    best = np.zeros(P, dtype=np.float64)
-    chosen = np.zeros(Mc, dtype=bool)
-    order_local: List[int] = []
-
-    while True:
-        improvement = np.maximum(q - best[:, None], 0.0)  # (P,Mc)
-        delta = improvement.sum(axis=0)                   # (Mc,)
-        delta[chosen] = -1.0
-
-        j = int(np.argmax(delta))
-        if delta[j] <= 0.0:
-            break  # no further positive marginal improvement
-        chosen[j] = True
-        order_local.append(j)
-        best = np.maximum(best, q[:, j])
-
-    # Append the remaining visible satellites in fallback order.
-    # We use total anchor quality as a stable, visibility-aware ranking.
-    remaining = np.where(~chosen)[0]
-    if remaining.size > 0:
-        rem_score = q[:, remaining].sum(axis=0)
-        rem_order = remaining[np.argsort(-rem_score, kind="mergesort")]
-        order_local.extend(rem_order.tolist())
-
-    selected_sat_idx = cand_idx[np.array(order_local, dtype=int)]
-
-    # Build ActiveSat list in greedy order
-    active: List[ActiveSat] = []
-    for si in selected_sat_idx:
-        sat = sats[int(si)]
-        # Satellite ECEF position at t0
-        p_km = sat.at(t).frame_xyz(itrs).km  # (3,)
-        ecef_m = np.array(p_km, dtype=float) * 1000.0
-
-        # DEBUG: max elevation across anchors
-        el_max = float(elev[:, int(si)].max())
-
-        active.append(ActiveSat(name=sat.name, ecef_m=ecef_m, elev_ref_deg=el_max))
-
+    anchor_ecef_m = _anchors_to_ecef_m(anchors)
+    active = _rank_visible_sats(sat_names, sat_ecef_m, anchor_ecef_m, emin_deg, quality_mode)
     return t0, active
+
+
+def _sort_active_sats_from_walker(
+    scenarioConfig: "ScenarioConfig",
+    *,
+    t0_utc: Optional[datetime],
+    n_lat_anchors: int,
+    n_lon_anchors: int,
+    quality_mode: str,
+) -> tuple[datetime, List[ActiveSat]]:
+    ms = scenarioConfig.multisat
+    walker = ms.walker
+    emin_deg = float(ms.elev_mask_deg)
+    bbox = scenarioConfig.bbox
+
+    epoch_utc = _parse_utc_iso(walker.epoch_utc_iso)
+    if t0_utc is not None:
+        t0 = _normalize_utc(t0_utc)
+    elif ms.time_utc_iso is not None:
+        t0 = _parse_utc_iso(ms.time_utc_iso)
+    else:
+        t0 = epoch_utc
+
+    dt_s = float((t0 - epoch_utc).total_seconds())
+    elems = _walker_delta_elements(
+        total_sats=int(walker.total_sats),
+        n_planes=int(walker.n_planes),
+        phasing=int(walker.phasing),
+        inc_deg=float(walker.inclination_deg),
+    )
+
+    sat_names = [name for name, _, _, _ in elems]
+    sat_ecef_m = np.stack(
+        [
+            _walker_sat_ecef_m(raan, inc, M0, dt_s, float(walker.altitude_m))
+            for _, raan, inc, M0 in elems
+        ],
+        axis=0,
+    )
+
+    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
+    anchor_ecef_m = _anchors_to_ecef_m(anchors)
+    active = _rank_visible_sats(sat_names, sat_ecef_m, anchor_ecef_m, emin_deg, quality_mode)
+    return t0, active
+
+
+# -----------------------------
+# Satellite selection API
+# -----------------------------
+def sort_active_sats(
+    scenarioConfig: "ScenarioConfig",
+    *,
+    t0_utc: Optional[datetime] = None,
+    n_lat_anchors: int = 3,
+    n_lon_anchors: int = 3,
+    quality_mode: str = "sin",
+) -> tuple[datetime, List[ActiveSat]]:
+    """
+    Returns a UTC snapshot time and an ordered list of active satellites.
+
+    Supported satellite sources:
+      - source == "tle"    : real satellites from a TLE file
+      - source == "walker" : synthetic Walker-delta constellation
+
+    Ranking behavior is identical in both modes:
+      1) filter satellites visible above the elevation mask at any anchor,
+      2) greedily rank them by marginal anchor-quality gain,
+      3) append the remaining visible satellites by fallback total quality.
+    """
+    source = str(getattr(scenarioConfig.multisat, "source", "tle")).lower()
+    if source == "tle":
+        return _sort_active_sats_from_tle(
+            scenarioConfig,
+            t0_utc=t0_utc,
+            n_lat_anchors=n_lat_anchors,
+            n_lon_anchors=n_lon_anchors,
+            quality_mode=quality_mode,
+        )
+    if source == "walker":
+        return _sort_active_sats_from_walker(
+            scenarioConfig,
+            t0_utc=t0_utc,
+            n_lat_anchors=n_lat_anchors,
+            n_lon_anchors=n_lon_anchors,
+            quality_mode=quality_mode,
+        )
+    raise ValueError(f"Unknown multisat.source={source!r}. Expected 'tle' or 'walker'.")
 
 
 # -----------------------------

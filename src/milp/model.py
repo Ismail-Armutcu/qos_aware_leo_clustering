@@ -17,10 +17,17 @@ class MILPSolveConfig:
     mip_gap: float = 0.0
     threads: Optional[int] = None
     log_to_console: bool = True
-    objective_mode: str = "beam_only"   # beam_only | weighted_sat_beam
+
+    # beam_only | weighted_sat_beam
+    objective_mode: str = "weighted_sat_beam"
     satellite_weight: Optional[float] = None
+
     mip_focus: int = 1
     presolve: int = -1
+
+    # If True, force satellite activation to be a prefix of the ranked satellite pool:
+    # z_{s+1} <= z_s for s = 0, ..., n_sats-2
+    enforce_prefix_activation: bool = True
 
 
 @dataclass(frozen=True)
@@ -34,7 +41,7 @@ class MILPSolution:
     solve_time_s: float
     used_sat_indices: list[int]
     active_beam_ids: list[int]
-    assignment: dict[int, int]                  # user -> beam id
+    assignment: dict[int, int]  # user -> beam id
     K_total: int
     n_used_sats: int
     sat_beam_count: dict[int, int]
@@ -43,7 +50,12 @@ class MILPSolution:
 
 
 class BeamPlacementMILP:
-    def __init__(self, cfg: ScenarioConfig, data: MILPPrecomputedData, solve_cfg: MILPSolveConfig | None = None) -> None:
+    def __init__(
+        self,
+        cfg: ScenarioConfig,
+        data: MILPPrecomputedData,
+        solve_cfg: MILPSolveConfig | None = None,
+    ) -> None:
         self.cfg = cfg
         self.data = data
         self.solve_cfg = solve_cfg or MILPSolveConfig()
@@ -59,7 +71,9 @@ class BeamPlacementMILP:
         }
         return mapping.get(status, f"STATUS_{status}")
 
-    def _set_objective(self, model: gp.Model, x: dict[int, gp.Var], z: dict[int, gp.Var]) -> None:
+    def _set_objective(
+        self, model: gp.Model, x: dict[int, gp.Var], z: dict[int, gp.Var]
+    ) -> None:
         mode = str(self.solve_cfg.objective_mode).lower().strip()
 
         if mode == "beam_only":
@@ -86,6 +100,7 @@ class BeamPlacementMILP:
     def solve(self) -> MILPSolution:
         data = self.data
         n_sats = len(data.instance.sat_pool)
+
         model = gp.Model("leo_grid_beam_milp")
         model.Params.TimeLimit = float(self.solve_cfg.time_limit_s)
         model.Params.MIPGap = float(self.solve_cfg.mip_gap)
@@ -98,52 +113,81 @@ class BeamPlacementMILP:
         candidates = data.candidates
         if not candidates:
             raise RuntimeError(
-                "No candidate beams generated. Increase satellite pool or relax grid spacing / coverage assumptions."
+                "No candidate beams generated. Increase satellite pool or relax "
+                "grid spacing / coverage assumptions."
             )
 
-        x = {c.bid: model.addVar(vtype=GRB.BINARY, name=f"x_{c.bid}") for c in candidates}
-        z = {s: model.addVar(vtype=GRB.BINARY, name=f"z_{s}") for s in range(n_sats)}
+        x = {
+            c.bid: model.addVar(vtype=GRB.BINARY, name=f"x_{c.bid}")
+            for c in candidates
+        }
+        z = {
+            s: model.addVar(vtype=GRB.BINARY, name=f"z_{s}")
+            for s in range(n_sats)
+        }
+
         y: dict[tuple[int, int], gp.Var] = {}
         for c in candidates:
             for uid in c.user_ids.tolist():
-                y[(int(uid), c.bid)] = model.addVar(vtype=GRB.BINARY, name=f"y_{uid}_{c.bid}")
-        model.update()
+                y[(int(uid), c.bid)] = model.addVar(
+                    vtype=GRB.BINARY, name=f"y_{uid}_{c.bid}"
+                )
 
+        model.update()
         self._set_objective(model, x, z)
 
         # Each user must be assigned exactly once.
         for uid, bids in data.user_to_bids.items():
             if not bids:
                 raise RuntimeError(
-                    f"User {uid} has no feasible candidate beam. Reduce grid spacing, enlarge satellite pool, or relax assumptions."
+                    f"User {uid} has no feasible candidate beam. Reduce grid spacing, "
+                    "enlarge satellite pool, or relax assumptions."
                 )
-            model.addConstr(gp.quicksum(y[(uid, b)] for b in bids) == 1, name=f"assign_{uid}")
+            model.addConstr(
+                gp.quicksum(y[(uid, b)] for b in bids) == 1,
+                name=f"assign_{uid}",
+            )
 
-        # Activation consistency
+        # Activation consistency.
         for (uid, bid), var in y.items():
             model.addConstr(var <= x[bid], name=f"yx_{uid}_{bid}")
 
-        # Satellite activation consistency
+        # Satellite activation consistency.
         for c in candidates:
             model.addConstr(x[c.bid] <= z[c.sat_idx], name=f"xz_{c.bid}")
+
+        # Ordered-prefix activation constraints.
+        # Enforce z_{s+1} <= z_s so the active satellite set is a prefix
+        # of the ranked candidate pool produced by MILPPreparation.
+        if bool(self.solve_cfg.enforce_prefix_activation):
+            for s in range(n_sats - 1):
+                model.addConstr(z[s + 1] <= z[s], name=f"prefix_{s+1}_le_{s}")
 
         W = float(self.cfg.payload.W_slots)
         J = float(self.cfg.payload.J_lanes)
         Ks_max = int(self.cfg.payload.Ks_max)
 
-        # Beam-level load
+        # Beam-level load.
         for c in candidates:
-            expr = gp.quicksum(float(c.a_coeff[int(uid)]) * y[(int(uid), c.bid)] for uid in c.user_ids.tolist())
+            expr = gp.quicksum(
+                float(c.a_coeff[int(uid)]) * y[(int(uid), c.bid)]
+                for uid in c.user_ids.tolist()
+            )
             model.addConstr(expr <= W * x[c.bid], name=f"beamcap_{c.bid}")
 
-        # Satellite beam count and total time budget
+        # Satellite beam count and total time budget.
         bid_to_cand = {c.bid: c for c in candidates}
         for s in range(n_sats):
             bids = data.sat_to_bids.get(s, [])
             if not bids:
                 model.addConstr(z[s] == 0, name=f"z_zero_{s}")
                 continue
-            model.addConstr(gp.quicksum(x[b] for b in bids) <= Ks_max * z[s], name=f"ks_{s}")
+
+            model.addConstr(
+                gp.quicksum(x[b] for b in bids) <= Ks_max * z[s],
+                name=f"ks_{s}",
+            )
+
             expr = gp.LinExpr()
             for b in bids:
                 cand = bid_to_cand[b]
@@ -157,6 +201,7 @@ class BeamPlacementMILP:
 
         status = int(model.Status)
         status_name = self._status_name(status)
+
         if status not in {GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL}:
             return MILPSolution(
                 feasible=False,
@@ -176,8 +221,12 @@ class BeamPlacementMILP:
                 beam_time_load={},
             )
 
-        used_sat_indices = [s for s, var in z.items() if var.X > 0.5]
         active_beam_ids = [c.bid for c in candidates if x[c.bid].X > 0.5]
+
+        # Prefer "used satellites" derived from active beams, not raw z values.
+        # This avoids counting satellites that may be left at z=1 in beam_only mode.
+        used_sat_indices = sorted({bid_to_cand[bid].sat_idx for bid in active_beam_ids})
+
         assignment: dict[int, int] = {}
         for (uid, bid), var in y.items():
             if var.X > 0.5:
@@ -186,13 +235,16 @@ class BeamPlacementMILP:
         sat_beam_count = {s: 0 for s in used_sat_indices}
         sat_time_load = {s: 0.0 for s in used_sat_indices}
         beam_time_load: dict[int, float] = {}
+
         for bid in active_beam_ids:
             cand = bid_to_cand[bid]
             sat_beam_count[cand.sat_idx] = sat_beam_count.get(cand.sat_idx, 0) + 1
+
             load = 0.0
             for uid in cand.user_ids.tolist():
                 if assignment.get(int(uid), None) == bid:
                     load += float(cand.a_coeff[int(uid)])
+
             beam_time_load[bid] = float(load)
             sat_time_load[cand.sat_idx] = sat_time_load.get(cand.sat_idx, 0.0) + float(load)
 
@@ -200,6 +252,7 @@ class BeamPlacementMILP:
         best_bound = float(model.ObjBound) if model.SolCount > 0 else None
         gap = float(model.MIPGap) if model.SolCount > 0 else None
         feasible = model.SolCount > 0
+
         return MILPSolution(
             feasible=bool(feasible),
             status=status,

@@ -6,7 +6,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 from config import ScenarioConfig
 from src.helper import flatten_run_record, write_csv
 from src.pipeline import run_scenario
-from src.sweep_plots import plot_phaseA, plot_phaseB, plot_all
+from src.sweep_plots import make_phaseB_plots
 import multiprocessing as mp
 from dataclasses import replace
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -65,55 +65,56 @@ def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) 
 
 def main():
     base = ScenarioConfig()
+    make_phaseB_plots("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
 
     # -------------------------
     # Phase A: robustness sweep
     # -------------------------
-    seeds = list(range(1, 11))
-
-    configs = []
-    for s in seeds:
-        cfg = replace(
-            base,
-            region_mode="turkey",
-            run=replace(
-                base.run,
-                seed=2,
-                n_users=50,
-                enable_plots=False,
-                verbose=False,
-                enable_fastbp_baselines = True
-            ),
-            usergen=replace(
-                base.usergen,
-                enabled=True,
-                n_hotspots=5,
-                hotspot_sigma_m_min=5_000.0,
-                hotspot_sigma_m_max=30_000.0,
-                noise_frac=0.15,
-            ),
-            lb_refine=replace(
-                base.lb_refine,
-                enabled=True
-            )
-        )
-        configs.append(cfg)
-
-    rows = run_parallel(configs, max_workers=None)
-
-    # Your flatten_run_record should already output seed; but now seed lives in cfg.run.seed
-    # Make sure your record uses cfg.run.seed (see note below).
-    rows.sort(key=lambda r: r["seed"])
-    write_csv("sweep_phaseA.csv", rows)
-    print(f"Wrote {len(rows)} runs to sweep_phaseA.csv")
-    plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
+    # seeds = list(range(1, 11))
+    #
+    # configs = []
+    # for s in seeds:
+    #     cfg = replace(
+    #         base,
+    #         region_mode="turkey",
+    #         run=replace(
+    #             base.run,
+    #             seed=2,
+    #             n_users=50,
+    #             enable_plots=False,
+    #             verbose=False,
+    #             enable_fastbp_baselines = True
+    #         ),
+    #         usergen=replace(
+    #             base.usergen,
+    #             enabled=True,
+    #             n_hotspots=5,
+    #             hotspot_sigma_m_min=5_000.0,
+    #             hotspot_sigma_m_max=30_000.0,
+    #             noise_frac=0.15,
+    #         ),
+    #         lb_refine=replace(
+    #             base.lb_refine,
+    #             enabled=True
+    #         )
+    #     )
+    #     configs.append(cfg)
+    #
+    # rows = run_parallel(configs, max_workers=None)
+    #
+    # # Your flatten_run_record should already output seed; but now seed lives in cfg.run.seed
+    # # Make sure your record uses cfg.run.seed (see note below).
+    # rows.sort(key=lambda r: r["seed"])
+    # write_csv("sweep_phaseA.csv", rows)
+    # print(f"Wrote {len(rows)} runs to sweep_phaseA.csv")
+    # plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
 
     # -------------------------
     # Phase B: scaling sweep
     # -------------------------
     #n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
 
-    n_users_list = [1000, 2500, 5000]
+    n_users_list = [1000, 1500, 2000, 2500]
     seeds_b = list(range(1, 6))
 
     configs_b = []
@@ -139,7 +140,7 @@ def main():
     rows_b.sort(key=lambda r: (r["n_users"], r["seed"]))
     write_csv("sweep_phaseB.csv", rows_b)
     print(f"Wrote {len(rows_b)} runs to sweep_phaseB.csv")
-    plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
+    make_phaseB_plots("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
 
 if __name__ == "__main__":
     mp.freeze_support()

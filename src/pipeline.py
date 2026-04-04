@@ -25,7 +25,7 @@ from src.usergen import generate_users, pack_users_raw, build_users_for_sat
 
 
 from src.coords import unit
-from src.satellites import sort_active_sats, associate_users_balanced
+from src.satellites import sort_active_sats, associate_users_by_rule
 
 
 
@@ -258,8 +258,6 @@ def _local_build_main_ref_lb(users_sat, cfg: ScenarioConfig, prof: Profiler):
 def _local_build_wkmeans_repaired(use_qos_weight: bool):
    cat = "baseline_with_qos" if use_qos_weight else "baseline_without_qos"
    def _builder(users_sat, cfg: ScenarioConfig, prof: Profiler):
-       # Keep the same reference-K convention as the existing code, but recompute it locally
-       # for the current prefix and satellite user set.
        K_ref = len(split_to_feasible(users_sat, cfg, prof=None)[0])
        prof.tic(cat)
        out = run_weighted_kmeans_baseline(users_sat, cfg, K_ref=K_ref, use_qos_weight=use_qos_weight)
@@ -300,18 +298,6 @@ def _payload_repair_inner(
    prof: Profiler,
    local_builder,
 ) -> tuple[bool, List[np.ndarray], dict[int, tuple[Any, list[np.ndarray], list[dict]]], dict]:
-   """
-   Payload feasibility with:
-     - KsMax-first repair pass (offload small/low-U beams first)
-     - Time-cap repair pass (offload high-U beams from worst satellite)
-     - Optional smoothing (reduce W_min_req if feasible but tight)
-
-
-   IMPORTANT FIX:
-     After any accepted move, cached clusters become stale (sat_user_ids ordering changed).
-     Therefore, donor selection ALWAYS re-fetches clusters_cache/evals_cache before the next move.
-     Additionally, _try_move rejects any stale beam index array.
-   """
    import math
 
 
@@ -391,7 +377,6 @@ def _payload_repair_inner(
        rebuild_sat(s)
 
 
-   # Any invalid local build is treated as infeasible for this method/prefix.
    if np.any(~np.isfinite(T_cache)):
        stats = {
            "enabled": True,
@@ -430,7 +415,6 @@ def _payload_repair_inner(
        return False, sat_user_ids, main_by_sat, stats
 
 
-   # Global time bound (for fixed S, J, W)
    T_sum = float(np.sum(T_cache))
    global_cap = float(S) * T_cap
    if T_sum > global_cap + 1e-6:
@@ -525,7 +509,6 @@ def _payload_repair_inner(
            return False
 
 
-       # SAFETY: reject stale beam indices
        nloc = int(sat_user_ids[s_donor].size)
        if np.any(beam_local_ids < 0) or np.any(beam_local_ids >= nloc):
            return False
@@ -599,7 +582,6 @@ def _payload_repair_inner(
            return True
 
 
-       # rollback
        sat_user_ids[s_donor] = donor_old
        sat_user_ids[s_recv] = recv_old
        rebuild_sat(s_donor)
@@ -615,7 +597,6 @@ def _payload_repair_inner(
        moved_this_round = 0
 
 
-       # PASS 1: KsMax-first
        donorsK = np.where(K_cache.astype(float) > float(K_cap) + tol)[0]
        if donorsK.size > 0:
            donorsK = donorsK[np.argsort(-(K_cache[donorsK] - K_cap), kind="mergesort")]
@@ -631,7 +612,7 @@ def _payload_repair_inner(
                    U_beams = np.array([float(ev.get("U", 0.0)) for ev in evals_d], dtype=float)
 
 
-                   order = np.lexsort((U_beams, sizes))  # small size, then low-U
+                   order = np.lexsort((U_beams, sizes))
                    moved = False
                    for k_beam in order[: min(8, order.size)]:
                        donor_local = np.asarray(clusters_d[int(k_beam)], dtype=int)
@@ -645,7 +626,6 @@ def _payload_repair_inner(
                        break
 
 
-       # PASS 2: Time-cap repair
        overT = np.maximum(0.0, T_cache - T_cap)
        donorsT = np.where(overT > tol)[0]
        if donorsT.size > 0 and moved_this_round < int(pcfg.max_offloads_per_round):
@@ -677,7 +657,6 @@ def _payload_repair_inner(
                        break
 
 
-       # PASS 3: smoothing (optional)
        key_now = state_key()
        if key_now[0] == 0 and key_now[3] == 0:
            Wreq = int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0))
@@ -714,7 +693,6 @@ def _payload_repair_inner(
            break
 
 
-       # Early exit if feasible and not tight
        key_now = state_key()
        if key_now[0] == 0 and key_now[3] == 0:
            Wreq = int(w_min_req_from_Tmax(float(np.max(T_cache)) if S else 0.0))
@@ -766,7 +744,6 @@ def _payload_repair_inner(
 
 
 
-
 @dataclass(frozen=True)
 class _Candidate:
    m: int
@@ -775,6 +752,7 @@ class _Candidate:
    pieces_by_sat: dict[int, tuple[Any, list[np.ndarray], list[dict]]]
    payload_stats: dict
    feasible: bool
+   assoc_rule: str = "balanced_max_elev"
 
 
 
@@ -792,19 +770,83 @@ def _failed_candidate_key(c: _Candidate) -> tuple:
 
 
 
+def _run_method_once(
+   users_raw,
+   sat_ecef_m: np.ndarray,
+   sat_vel_mps: np.ndarray | None,
+   cfg: ScenarioConfig,
+   local_builder,
+   *,
+   assoc_rule: str,
+   prof: Profiler,
+) -> _Candidate:
+   ms = cfg.multisat
+   pcfg = cfg.payload
+
+   prof.tic("assoc")
+   assoc = associate_users_by_rule(
+       assoc_rule,
+       user_ecef_m=users_raw.ecef_m,
+       user_demand_mbps=users_raw.demand_mbps,
+       user_qos_w=users_raw.qos_w,
+       sat_ecef_m=sat_ecef_m,
+       sat_vel_mps=sat_vel_mps,
+       elev_mask_deg=ms.elev_mask_deg,
+       load_mode=ms.assoc_load_mode,
+       slack=ms.assoc_slack,
+       max_rounds=ms.assoc_max_rounds,
+       max_total_moves=ms.assoc_max_moves,
+       seed=int(cfg.run.seed),
+   )
+   prof.toc("assoc")
+
+   sat_user_ids_init = [np.asarray(x, dtype=int) for x in assoc.sat_user_ids]
+
+   if pcfg.enabled:
+       feasible, sat_user_ids_out, pieces_by_sat, payload_stats = _payload_repair_inner(
+           users_raw=users_raw,
+           sat_ecef_m=sat_ecef_m,
+           sat_user_ids_init=sat_user_ids_init,
+           cfg=cfg,
+           prof=prof,
+           local_builder=local_builder,
+       )
+   else:
+       pieces_by_sat = {}
+       for s in range(int(sat_ecef_m.shape[0])):
+           u, c, e, _T = _build_sat_piece_with_local_builder(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof, local_builder)
+           if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
+               pieces_by_sat[s] = (u, c, e)
+       feasible = True
+       sat_user_ids_out = sat_user_ids_init
+       payload_stats = {"enabled": False, "feasible": True}
+
+   return _Candidate(
+       m=int(sat_ecef_m.shape[0]),
+       assoc=assoc,
+       sat_user_ids=sat_user_ids_out,
+       pieces_by_sat=pieces_by_sat,
+       payload_stats=payload_stats,
+       feasible=bool(feasible),
+       assoc_rule=str(assoc_rule),
+   )
+
+
+
 def _run_method_with_prefix_search(
    users_raw,
    sat_ecef_full: np.ndarray,
+   sat_vel_full: np.ndarray | None,
    active_sats,
    cfg: ScenarioConfig,
    local_builder,
    *,
+   assoc_rule: str,
    prof: Profiler,
 ) -> tuple[_Candidate | None, float]:
    import time
 
 
-   ms = cfg.multisat
    pcfg = cfg.payload
    max_prefix = int(pcfg.max_prefix) if pcfg.max_prefix is not None else int(len(active_sats))
    max_prefix = max(1, min(max_prefix, int(len(active_sats))))
@@ -817,69 +859,48 @@ def _run_method_with_prefix_search(
    t_start = time.perf_counter()
    for m in range(1, max_prefix + 1):
        sat_ecef_m = sat_ecef_full[:m].copy()
-
-
-       prof.tic("assoc")
-       assoc = associate_users_balanced(
-           user_ecef_m=users_raw.ecef_m,
-           user_demand_mbps=users_raw.demand_mbps,
-           user_qos_w=users_raw.qos_w,
-           sat_ecef_m=sat_ecef_m,
-           elev_mask_deg=ms.elev_mask_deg,
-           load_mode=ms.assoc_load_mode,
-           slack=ms.assoc_slack,
-           max_rounds=ms.assoc_max_rounds,
-           max_total_moves=ms.assoc_max_moves,
-           seed=int(cfg.run.seed),
+       sat_vel_m = sat_vel_full[:m].copy() if sat_vel_full is not None else None
+       cand = _run_method_once(
+           users_raw, sat_ecef_m, sat_vel_m, cfg, local_builder,
+           assoc_rule=assoc_rule, prof=prof,
        )
-       prof.toc("assoc")
-
-
-       sat_user_ids_init = [np.asarray(x, dtype=int) for x in assoc.sat_user_ids]
-
-
-       if pcfg.enabled:
-           feasible, sat_user_ids_out, pieces_by_sat, payload_stats = _payload_repair_inner(
-               users_raw=users_raw,
-               sat_ecef_m=sat_ecef_m,
-               sat_user_ids_init=sat_user_ids_init,
-               cfg=cfg,
-               prof=prof,
-               local_builder=local_builder,
-           )
-       else:
-           pieces_by_sat = {}
-           for s in range(m):
-               u, c, e, _T = _build_sat_piece_with_local_builder(users_raw, sat_user_ids_init, sat_ecef_m, s, cfg, prof, local_builder)
-               if u is not None and c is not None and e is not None and sat_user_ids_init[s].size > 0:
-                   pieces_by_sat[s] = (u, c, e)
-           feasible = True
-           sat_user_ids_out = sat_user_ids_init
-           payload_stats = {"enabled": False, "feasible": True}
-
-
-       cand = _Candidate(
-           m=m,
-           assoc=assoc,
-           sat_user_ids=sat_user_ids_out,
-           pieces_by_sat=pieces_by_sat,
-           payload_stats=payload_stats,
-           feasible=bool(feasible),
-       )
-
 
        if cand.feasible:
            best_feasible = cand
            break
 
-
        if best_failed is None or _failed_candidate_key(cand) < _failed_candidate_key(best_failed):
            best_failed = cand
-
 
    runtime_s = time.perf_counter() - t_start
    chosen = best_feasible if best_feasible is not None else best_failed
    return chosen, float(runtime_s)
+
+
+
+def _run_method_with_fixed_prefix(
+   users_raw,
+   sat_ecef_full: np.ndarray,
+   sat_vel_full: np.ndarray | None,
+   cfg: ScenarioConfig,
+   local_builder,
+   *,
+   m_fixed: int,
+   assoc_rule: str,
+   prof: Profiler,
+) -> tuple[_Candidate, float]:
+   import time
+
+   m = int(max(1, min(m_fixed, sat_ecef_full.shape[0])))
+   sat_ecef_m = sat_ecef_full[:m].copy()
+   sat_vel_m = sat_vel_full[:m].copy() if sat_vel_full is not None else None
+   t_start = time.perf_counter()
+   cand = _run_method_once(
+       users_raw, sat_ecef_m, sat_vel_m, cfg, local_builder,
+       assoc_rule=assoc_rule, prof=prof,
+   )
+   runtime_s = time.perf_counter() - t_start
+   return cand, float(runtime_s)
 
 
 
@@ -892,11 +913,33 @@ def _candidate_summary(cand: _Candidate | None, cfg: ScenarioConfig) -> dict[str
 
 
 
+def _candidate_meta(cand: _Candidate | None) -> dict[str, Any]:
+   if cand is None:
+       return {
+           "payload_feasible": False,
+           "best_m": 0,
+           "assoc_moves": 0,
+           "n_unserved": 0,
+           "n_viol_T": 0,
+           "n_viol_K": 0,
+           "T_over_sum": 0.0,
+           "K_over_sum": 0.0,
+       }
+   ps = cand.payload_stats or {}
+   return {
+       "payload_feasible": bool(cand.feasible),
+       "best_m": int(cand.m),
+       "assoc_moves": int(getattr(cand.assoc, "n_moves", 0)),
+       "n_unserved": int(getattr(cand.assoc, "n_unserved", 0)),
+       "n_viol_T": int(ps.get("n_viol_T", 0)),
+       "n_viol_K": int(ps.get("n_viol_K", 0)),
+       "T_over_sum": float(ps.get("T_over_sum", 0.0)),
+       "K_over_sum": float(ps.get("K_over_sum", 0.0)),
+   }
+
+
 
 def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
-   import time
-
-
    ms = cfg.multisat
    pcfg = cfg.payload
    verbose = bool(getattr(cfg.run, "verbose", True))
@@ -925,34 +968,67 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
 
 
    sat_ecef_full = np.stack([s.ecef_m for s in active_sats], axis=0)
+   sat_vel_full = None
+   try:
+       if all(getattr(s, "ecef_vel_mps", None) is not None for s in active_sats):
+           sat_vel_full = np.stack([np.asarray(s.ecef_vel_mps, dtype=float) for s in active_sats], axis=0)
+   except Exception:
+       sat_vel_full = None
 
 
-   # Full pipeline for each compared method (Option B)
+   # Full pipeline for each compared method (existing comparisons keep balanced_max_elev)
    prof_main = Profiler()
-   cand_main, rt_main = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main, prof=prof_main)
-   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main")
+   cand_main, rt_main = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_main, assoc_rule="balanced_max_elev", prof=prof_main)
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main assoc_rule: balanced_max_elev")
 
 
    prof_ref = Profiler()
-   cand_ref, rt_ref = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main_ref, prof=prof_ref)
-   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref")
+   cand_ref, rt_ref = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_main_ref, assoc_rule="balanced_max_elev", prof=prof_ref)
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref assoc_rule: balanced_max_elev")
 
 
    prof_lb = Profiler()
-   cand_lb, rt_lb = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_main_ref_lb, prof=prof_lb)
-   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb")
+   cand_lb, rt_lb = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_main_ref_lb, assoc_rule="balanced_max_elev", prof=prof_lb)
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb assoc_rule: balanced_max_elev")
+
+
+   # New system-level comparison B:
+   # Use the same fixed prefix m chosen by the full proposed method, then compare
+   # association rules under the SAME prefix and SAME downstream pipeline.
+   sys_fixed_m = int(cand_lb.m) if cand_lb is not None else 1
+
+   prof_sys_pure = Profiler()
+   cand_sys_pure, rt_sys_pure = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main_ref_lb,
+       m_fixed=sys_fixed_m, assoc_rule="pure_max_elev", prof=prof_sys_pure,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb assoc_rule: pure_max_elev fixed_m: {sys_fixed_m}")
+
+   prof_sys_bal = Profiler()
+   cand_sys_bal, rt_sys_bal = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main_ref_lb,
+       m_fixed=sys_fixed_m, assoc_rule="balanced_max_elev", prof=prof_sys_bal,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb assoc_rule: balanced_max_elev fixed_m: {sys_fixed_m}")
+
+   prof_sys_dur = Profiler()
+   cand_sys_dur, rt_sys_dur = _run_method_with_fixed_prefix(
+       users_raw, sat_ecef_full, sat_vel_full, cfg, _local_build_main_ref_lb,
+       m_fixed=sys_fixed_m, assoc_rule="max_service_time", prof=prof_sys_dur,
+   )
+   print(f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_main_ref_lb assoc_rule: max_service_time fixed_m: {sys_fixed_m}")
 
 
    prof_wk_d = Profiler()
-   cand_wk_d_rep, rt_wk_d = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_wkmeans_repaired(False), prof=prof_wk_d)
+   cand_wk_d_rep, rt_wk_d = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_wkmeans_repaired(False), assoc_rule="balanced_max_elev", prof=prof_wk_d)
    print(
-       f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_wkmeans_repaired use_qos_weight{False}")
+       f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_wkmeans_repaired use_qos_weight{False} assoc_rule: balanced_max_elev")
 
 
    prof_wk_q = Profiler()
-   cand_wk_q_rep, rt_wk_q = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_wkmeans_repaired(True), prof=prof_wk_q)
+   cand_wk_q_rep, rt_wk_q = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_wkmeans_repaired(True), assoc_rule="balanced_max_elev", prof=prof_wk_q)
    print(
-       f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_wkmeans_repaired use_qos_weight{True}")
+       f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_wkmeans_repaired use_qos_weight{True} assoc_rule: balanced_max_elev")
 
 
    cand_bk_rep = None
@@ -961,13 +1037,13 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
    rt_tg = float("nan")
    if bool(getattr(cfg.run, "enable_fastbp_baselines", True)):
        prof_bk = Profiler()
-       cand_bk_rep, rt_bk = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_bkmeans_repaired, prof=prof_bk)
+       cand_bk_rep, rt_bk = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_bkmeans_repaired, assoc_rule="balanced_max_elev", prof=prof_bk)
        print(
-           f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_bkmeans_repaired")
+           f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_bkmeans_repaired assoc_rule: balanced_max_elev")
        prof_tg = Profiler()
-       cand_tg_rep, rt_tg = _run_method_with_prefix_search(users_raw, sat_ecef_full, active_sats, cfg, _local_build_tgbp_repaired, prof=prof_tg)
+       cand_tg_rep, rt_tg = _run_method_with_prefix_search(users_raw, sat_ecef_full, sat_vel_full, active_sats, cfg, _local_build_tgbp_repaired, assoc_rule="balanced_max_elev", prof=prof_tg)
        print(
-           f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_tgbp_repaired")
+           f"seed: {cfg.run.seed} users: {cfg.run.n_users} active_sats: {len(active_sats)} method: _local_build_tgbp_repaired assoc_rule: balanced_max_elev")
    else:
        prof_bk = Profiler()
        prof_tg = Profiler()
@@ -976,13 +1052,15 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
    main_summary = _candidate_summary(cand_main, cfg)
    ref_summary = _candidate_summary(cand_ref, cfg)
    lb_summary = _candidate_summary(cand_lb, cfg)
+   sys_pure_summary = _candidate_summary(cand_sys_pure, cfg)
+   sys_balanced_summary = _candidate_summary(cand_sys_bal, cfg)
+   sys_service_time_summary = _candidate_summary(cand_sys_dur, cfg)
    wk_demand_rep = _candidate_summary(cand_wk_d_rep, cfg)
    wk_qos_rep = _candidate_summary(cand_wk_q_rep, cfg)
    bk_rep = _candidate_summary(cand_bk_rep, cfg)
    tgbp_rep = _candidate_summary(cand_tg_rep, cfg)
 
 
-   # Fixed-K outputs are no longer reported as payload-feasible methods under Option B.
    wk_demand_fixed = _nan_summary()
    wk_qos_fixed = _nan_summary()
    bk_fixed = _nan_summary()
@@ -998,6 +1076,9 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        print_summary("Main algorithm (payload-feasible) [global]", main_summary, cfg)
        print_summary("Main + enterprise refinement (payload-feasible) [global]", ref_summary, cfg)
        print_summary("Main + enterprise + load-balance (payload-feasible) [global]", lb_summary, cfg)
+       print_summary(f"System compare: pure max-elevation @ fixed prefix m={sys_fixed_m}", sys_pure_summary, cfg)
+       print_summary(f"System compare: balanced max-elevation @ fixed prefix m={sys_fixed_m}", sys_balanced_summary, cfg)
+       print_summary(f"System compare: max-service-time @ fixed prefix m={sys_fixed_m}", sys_service_time_summary, cfg)
        print_summary("WKMeans++ baseline (demand) after payload certification [global]", wk_demand_rep, cfg)
        print_summary("WKMeans++ baseline (demand*qos) after payload certification [global]", wk_qos_rep, cfg)
        if bool(getattr(cfg.run, "enable_fastbp_baselines", True)):
@@ -1005,7 +1086,6 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
            print_summary("TGBP baseline (payload-certified repaired) [global]", tgbp_rep, cfg)
 
 
-   # Time decomposition so that time_split + time_ent_ref + time_lb_ref ~= full MY algorithm total
    time_split_s = float(rt_main) if (cand_main is not None and cand_main.feasible) else float("nan")
    time_ent_ref_s = float(max(0.0, rt_ref - rt_main)) if (cand_ref is not None and cand_ref.feasible and cand_main is not None and cand_main.feasible) else float("nan")
    time_lb_ref_s = float(max(0.0, rt_lb - rt_ref)) if (cand_lb is not None and cand_lb.feasible and cand_ref is not None and cand_ref.feasible) else float("nan")
@@ -1086,6 +1166,9 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        "time_split_s": time_split_s,
        "time_ent_ref_s": time_ent_ref_s,
        "time_lb_ref_s": time_lb_ref_s,
+       "time_sys_pure_max_elev_s": float(rt_sys_pure),
+       "time_sys_balanced_max_elev_s": float(rt_sys_bal),
+       "time_sys_max_service_time_s": float(rt_sys_dur),
 
 
        "eval_calls": int((prof_lb if (cand_lb is not None and cand_lb.feasible) else prof_main).c.get("eval_calls", 0)),
@@ -1118,10 +1201,27 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        "tgbp_rep_payload_feasible": bool(cand_tg_rep is not None and cand_tg_rep.feasible),
        "tgbp_rep_best_m": int(cand_tg_rep.m) if cand_tg_rep is not None else 0,
 
+       # New system-level fixed-prefix association comparison metadata
+       "sys_assoc_fixed_prefix_m": int(sys_fixed_m),
+       "sys_pure_max_elev_payload_feasible": bool(cand_sys_pure is not None and cand_sys_pure.feasible),
+       "sys_pure_max_elev_best_m": int(cand_sys_pure.m) if cand_sys_pure is not None else 0,
+       "sys_pure_max_elev_assoc_moves": int(getattr(cand_sys_pure.assoc, "n_moves", 0)) if cand_sys_pure is not None else 0,
+       "sys_pure_max_elev_n_unserved": int(getattr(cand_sys_pure.assoc, "n_unserved", 0)) if cand_sys_pure is not None else 0,
+       "sys_balanced_max_elev_payload_feasible": bool(cand_sys_bal is not None and cand_sys_bal.feasible),
+       "sys_balanced_max_elev_best_m": int(cand_sys_bal.m) if cand_sys_bal is not None else 0,
+       "sys_balanced_max_elev_assoc_moves": int(getattr(cand_sys_bal.assoc, "n_moves", 0)) if cand_sys_bal is not None else 0,
+       "sys_balanced_max_elev_n_unserved": int(getattr(cand_sys_bal.assoc, "n_unserved", 0)) if cand_sys_bal is not None else 0,
+       "sys_max_service_time_payload_feasible": bool(cand_sys_dur is not None and cand_sys_dur.feasible),
+       "sys_max_service_time_best_m": int(cand_sys_dur.m) if cand_sys_dur is not None else 0,
+       "sys_max_service_time_assoc_moves": int(getattr(cand_sys_dur.assoc, "n_moves", 0)) if cand_sys_dur is not None else 0,
+       "sys_max_service_time_n_unserved": int(getattr(cand_sys_dur.assoc, "n_unserved", 0)) if cand_sys_dur is not None else 0,
 
        "main": main_summary,
        "main_ref": ref_summary,
        "main_ref_lb": lb_summary,
+       "sys_pure_max_elev": sys_pure_summary,
+       "sys_balanced_max_elev": sys_balanced_summary,
+       "sys_max_service_time": sys_service_time_summary,
        "wk_demand_fixed": wk_demand_fixed,
        "wk_demand_rep": wk_demand_rep,
        "wk_qos_fixed": wk_qos_fixed,
@@ -1131,4 +1231,3 @@ def run_scenario(cfg: ScenarioConfig) -> dict[str, Any]:
        "tgbp_fixed": tgbp_fixed,
        "tgbp_rep": tgbp_rep,
    }
-

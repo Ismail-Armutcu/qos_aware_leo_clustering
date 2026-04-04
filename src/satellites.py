@@ -1,4 +1,3 @@
-# src/satellites.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,19 +6,10 @@ from typing import List, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 
-from src.coords import llh_to_ecef, unit
+from src.coords import unit
 
 if TYPE_CHECKING:
     from config import ScenarioConfig, BBox
-
-
-# -----------------------------
-# Constants
-# -----------------------------
-EARTH_RADIUS_M = 6_371_000.0
-MU_EARTH_M3_S2 = 3.986004418e14
-SIDEREAL_DAY_S = 86164.0905
-EARTH_ROT_RATE_RAD_S = 2.0 * np.pi / SIDEREAL_DAY_S
 
 
 # -----------------------------
@@ -28,18 +18,21 @@ EARTH_ROT_RATE_RAD_S = 2.0 * np.pi / SIDEREAL_DAY_S
 @dataclass(frozen=True)
 class ActiveSat:
     """Active satellite at a given instant (snapshot)."""
+
     name: str
-    ecef_m: np.ndarray   # (3,)
-    elev_ref_deg: float  # max elevation across anchors
+    ecef_m: np.ndarray  # (3,)
+    elev_ref_deg: float  # DEBUG: max elevation across anchors
+    ecef_vel_mps: Optional[np.ndarray] = None  # (3,), optional finite-difference velocity
 
 
 @dataclass(frozen=True)
 class AssocResult:
-    """Result of balanced user->satellite association."""
-    assign: np.ndarray                 # (N,), sat index or -1
-    sat_user_ids: List[np.ndarray]     # length S, each array of user indices
-    loads: np.ndarray                  # (S,), load per sat (count or demand or wq-demand)
-    cap: float                         # soft cap used for balancing
+    """Result of user->satellite association."""
+
+    assign: np.ndarray  # (N,), sat index or -1
+    sat_user_ids: List[np.ndarray]  # length S, each array of user indices
+    loads: np.ndarray  # (S,), load per sat (count or demand or wq-demand)
+    cap: float  # soft cap used for balancing / reporting
     n_unserved: int
     n_moves: int
 
@@ -56,8 +49,8 @@ class Anchor:
 # -----------------------------
 def _parse_utc_iso(iso_z: str) -> datetime:
     """
-    Parse an ISO time string. Accepts 'Z' suffix for UTC.
-    Returns timezone-aware UTC datetime.
+    Parse an ISO time string.
+    Accepts 'Z' suffix for UTC. Returns timezone-aware UTC datetime.
     """
     s = iso_z.strip()
     if s.endswith("Z"):
@@ -68,20 +61,15 @@ def _parse_utc_iso(iso_z: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _normalize_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
 def _choose_snapshot_time_utc(sats: Sequence[object]) -> datetime:
-    """
-    Deterministic snapshot selection for TLE mode: midpoint of TLE epoch span (UTC).
-    """
+    """Deterministic snapshot selection: midpoint of TLE epoch span (UTC)."""
     epochs = [sat.epoch.utc_datetime() for sat in sats]
     t_min = min(epochs)
     t_max = max(epochs)
-    return _normalize_utc(t_min + (t_max - t_min) / 2)
+    t0 = t_min + (t_max - t_min) / 2
+    if t0.tzinfo is None:
+        return t0.replace(tzinfo=timezone.utc)
+    return t0.astimezone(timezone.utc)
 
 
 def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anchor]:
@@ -91,7 +79,6 @@ def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anc
     """
     if n_lat < 2 or n_lon < 2:
         raise ValueError("Anchor grid must be at least 2x2 (use 3x3 by default).")
-
     lats = np.linspace(float(bbox.lat_min), float(bbox.lat_max), int(n_lat))
     lons = np.linspace(float(bbox.lon_min), float(bbox.lon_max), int(n_lon))
     anchors: List[Anchor] = []
@@ -101,22 +88,19 @@ def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anc
     return anchors
 
 
-def _anchors_to_ecef_m(anchors: Sequence[Anchor]) -> np.ndarray:
-    lat = np.array([a.lat_deg for a in anchors], dtype=float)
-    lon = np.array([a.lon_deg for a in anchors], dtype=float)
-    h = np.array([a.height_m for a in anchors], dtype=float)
-    return np.asarray(llh_to_ecef(lat, lon, h), dtype=float)
-
-
 def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "sin") -> np.ndarray:
     """
-    Convert elevation (deg) to a nonnegative quality, with q=0 below mask.
+    Convert elevation (deg) to a nonnegative quality q, with q=0 below mask.
+
+    mode:
+      - "sin":    q = sin(e)
+      - "sin2":   q = sin(e)^2
+      - "linear": q = e (deg)
     """
     q = np.zeros_like(elev_deg, dtype=np.float64)
     mask = elev_deg >= float(emin_deg)
     if not np.any(mask):
         return q
-
     if mode == "sin":
         q[mask] = np.sin(np.deg2rad(elev_deg[mask]))
     elif mode == "sin2":
@@ -129,88 +113,97 @@ def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "s
     return q
 
 
-def _walker_mean_motion_rad_s(altitude_m: float) -> float:
-    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
-    return float(np.sqrt(MU_EARTH_M3_S2 / (r_orbit_m ** 3)))
+def _compute_load_weights(
+    user_demand_mbps: np.ndarray,
+    user_qos_w: np.ndarray,
+    load_mode: str,
+) -> np.ndarray:
+    if load_mode == "count":
+        return np.ones(user_demand_mbps.shape[0], dtype=np.float64)
+    if load_mode == "demand":
+        return user_demand_mbps.astype(np.float64)
+    if load_mode == "wq_demand":
+        return user_demand_mbps.astype(np.float64) * user_qos_w.astype(np.float64)
+    raise ValueError(f"Unknown load_mode={load_mode}")
 
 
-def _walker_delta_elements(total_sats: int, n_planes: int, phasing: int, inc_deg: float) -> list[tuple[str, float, float, float]]:
-    """
-    Walker-delta constellation definition.
-
-    Returns a list of tuples: (name, RAAN_rad, inc_rad, M0_rad)
-    """
-    T = int(total_sats)
-    P = int(n_planes)
-    F = int(phasing)
-    if T <= 0 or P <= 0:
-        raise ValueError("Walker parameters must satisfy total_sats > 0 and n_planes > 0.")
-    if T % P != 0:
-        raise ValueError(f"Walker-delta requires total_sats divisible by n_planes, got T={T}, P={P}.")
-
-    sats_per_plane = T // P
-    inc = float(np.deg2rad(inc_deg))
-    elems: list[tuple[str, float, float, float]] = []
-    for p in range(P):
-        raan = 2.0 * np.pi * p / P
-        for s in range(sats_per_plane):
-            M0 = 2.0 * np.pi * s / sats_per_plane + 2.0 * np.pi * F * p / T
-            elems.append((f"WALKER-P{p:02d}-S{s:02d}", float(raan), inc, float(M0)))
-    return elems
+def _loads_and_cap(assign: np.ndarray, w: np.ndarray, S: int, slack: float) -> tuple[np.ndarray, float]:
+    loads = np.zeros(S, dtype=np.float64)
+    for s in range(S):
+        idx = np.where(assign == s)[0]
+        if idx.size:
+            loads[s] = float(w[idx].sum())
+    served_mask = assign >= 0
+    total_load = float(w[served_mask].sum())
+    cap = (total_load / max(S, 1)) * (1.0 + float(slack))
+    return loads, float(cap)
 
 
-def _walker_sat_ecef_m(raan_rad: float, inc_rad: float, M0_rad: float, dt_s: float, altitude_m: float) -> np.ndarray:
-    """
-    Circular-orbit Walker satellite propagated from the reference epoch into ECEF.
-    """
-    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
-    n = _walker_mean_motion_rad_s(altitude_m)
-    u = float(M0_rad + n * dt_s)
-
-    cosO = float(np.cos(raan_rad))
-    sinO = float(np.sin(raan_rad))
-    cosi = float(np.cos(inc_rad))
-    sini = float(np.sin(inc_rad))
-    cosu = float(np.cos(u))
-    sinu = float(np.sin(u))
-
-    x_eci = r_orbit_m * (cosO * cosu - sinO * sinu * cosi)
-    y_eci = r_orbit_m * (sinO * cosu + cosO * sinu * cosi)
-    z_eci = r_orbit_m * (sinu * sini)
-
-    theta = EARTH_ROT_RATE_RAD_S * float(dt_s)
-    c = float(np.cos(theta))
-    s = float(np.sin(theta))
-
-    x_ecef = c * x_eci + s * y_eci
-    y_ecef = -s * x_eci + c * y_eci
-    return np.array([x_ecef, y_ecef, z_eci], dtype=float)
-
-
-def _rank_visible_sats(
-    sat_names: Sequence[str],
-    sat_ecef_m: np.ndarray,
-    anchor_ecef_m: np.ndarray,
-    emin_deg: float,
+# -----------------------------
+# Satellite selection API
+# -----------------------------
+def sort_active_sats(
+    scenarioConfig: "ScenarioConfig",
+    *,
+    t0_utc: Optional[datetime] = None,
+    n_lat_anchors: int = 3,
+    n_lon_anchors: int = 3,
     quality_mode: str = "sin",
-) -> List[ActiveSat]:
+) -> tuple[datetime, List[ActiveSat]]:
     """
-    Common ranking logic for both TLE and Walker sources.
-    """
-    if sat_ecef_m.size == 0:
-        return []
+    Load a TLE file, choose a snapshot time t0, then select active satellites using:
+      (1) Multi-anchor visibility filter
+      (2) Greedy marginal-gain ordering over anchor quality
 
-    elev = _elevations_deg(anchor_ecef_m, sat_ecef_m).astype(np.float64)  # (P, N)
-    cand_mask = (elev >= float(emin_deg)).any(axis=0)
+    Returns
+    -------
+    (t0_utc, active_sats)
+    """
+    from skyfield.api import load, wgs84
+    from skyfield.framelib import itrs
+
+    tle_path = scenarioConfig.multisat.tle_path
+    emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
+    bbox = scenarioConfig.bbox
+
+    ts = load.timescale()
+    sats = load.tle_file(tle_path)
+    if len(sats) == 0:
+        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
+
+    if t0_utc is not None:
+        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
+    elif scenarioConfig.multisat.time_utc_iso is not None:
+        t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
+    else:
+        t0 = _choose_snapshot_time_utc(sats)
+
+    t = ts.from_datetime(t0)
+    dt_vel_s = 5.0
+    t0_vel = t0 + __import__('datetime').timedelta(seconds=dt_vel_s)
+    t2 = ts.from_datetime(t0_vel)
+
+    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
+    P = len(anchors)
+    N = len(sats)
+    obs = [wgs84.latlon(a.lat_deg, a.lon_deg, elevation_m=a.height_m) for a in anchors]
+
+    elev = np.empty((P, N), dtype=np.float32)
+    for si, sat in enumerate(sats):
+        for pi, o in enumerate(obs):
+            alt, _, _ = (sat - o).at(t).altaz()
+            elev[pi, si] = float(alt.degrees)
+
+    cand_mask = (elev >= emin_deg).any(axis=0)
     cand_idx = np.where(cand_mask)[0]
     if cand_idx.size == 0:
-        return []
+        return t0, []
 
-    elev_c = elev[:, cand_idx]
-    q = _quality_from_elev_deg(elev_c, emin_deg=float(emin_deg), mode=quality_mode)
+    elev_c = elev[:, cand_idx].astype(np.float64)
+    q = _quality_from_elev_deg(elev_c, emin_deg=emin_deg, mode=quality_mode)
 
     Mc = q.shape[1]
-    best = np.zeros(q.shape[0], dtype=np.float64)
+    best = np.zeros(P, dtype=np.float64)
     chosen = np.zeros(Mc, dtype=bool)
     order_local: List[int] = []
 
@@ -235,145 +228,19 @@ def _rank_visible_sats(
 
     active: List[ActiveSat] = []
     for si in selected_sat_idx:
-        active.append(
-            ActiveSat(
-                name=str(sat_names[int(si)]),
-                ecef_m=np.asarray(sat_ecef_m[int(si)], dtype=float),
-                elev_ref_deg=float(elev[:, int(si)].max()),
-            )
-        )
-    return active
-
-
-def _sort_active_sats_from_tle(
-    scenarioConfig: "ScenarioConfig",
-    *,
-    t0_utc: Optional[datetime],
-    n_lat_anchors: int,
-    n_lon_anchors: int,
-    quality_mode: str,
-) -> tuple[datetime, List[ActiveSat]]:
-    from skyfield.api import load
-    from skyfield.framelib import itrs
-
-    tle_path = scenarioConfig.multisat.tle_path
-    emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
-    bbox = scenarioConfig.bbox
-
-    ts = load.timescale()
-    sats = load.tle_file(tle_path)
-    if len(sats) == 0:
-        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
-
-    if t0_utc is not None:
-        t0 = _normalize_utc(t0_utc)
-    elif scenarioConfig.multisat.time_utc_iso is not None:
-        t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
-    else:
-        t0 = _choose_snapshot_time_utc(sats)
-
-    t = ts.from_datetime(t0)
-    sat_names = [sat.name for sat in sats]
-    sat_ecef_m = np.stack(
-        [np.asarray(sat.at(t).frame_xyz(itrs).km, dtype=float) * 1000.0 for sat in sats],
-        axis=0,
-    )
-
-    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
-    anchor_ecef_m = _anchors_to_ecef_m(anchors)
-    active = _rank_visible_sats(sat_names, sat_ecef_m, anchor_ecef_m, emin_deg, quality_mode)
-    return t0, active
-
-
-def _sort_active_sats_from_walker(
-    scenarioConfig: "ScenarioConfig",
-    *,
-    t0_utc: Optional[datetime],
-    n_lat_anchors: int,
-    n_lon_anchors: int,
-    quality_mode: str,
-) -> tuple[datetime, List[ActiveSat]]:
-    ms = scenarioConfig.multisat
-    walker = ms.walker
-    emin_deg = float(ms.elev_mask_deg)
-    bbox = scenarioConfig.bbox
-
-    epoch_utc = _parse_utc_iso(walker.epoch_utc_iso)
-    if t0_utc is not None:
-        t0 = _normalize_utc(t0_utc)
-    elif ms.time_utc_iso is not None:
-        t0 = _parse_utc_iso(ms.time_utc_iso)
-    else:
-        t0 = epoch_utc
-
-    dt_s = float((t0 - epoch_utc).total_seconds())
-    elems = _walker_delta_elements(
-        total_sats=int(walker.total_sats),
-        n_planes=int(walker.n_planes),
-        phasing=int(walker.phasing),
-        inc_deg=float(walker.inclination_deg),
-    )
-
-    sat_names = [name for name, _, _, _ in elems]
-    sat_ecef_m = np.stack(
-        [
-            _walker_sat_ecef_m(raan, inc, M0, dt_s, float(walker.altitude_m))
-            for _, raan, inc, M0 in elems
-        ],
-        axis=0,
-    )
-
-    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
-    anchor_ecef_m = _anchors_to_ecef_m(anchors)
-    active = _rank_visible_sats(sat_names, sat_ecef_m, anchor_ecef_m, emin_deg, quality_mode)
+        sat = sats[int(si)]
+        p_km = sat.at(t).frame_xyz(itrs).km
+        p2_km = sat.at(t2).frame_xyz(itrs).km
+        ecef_m = np.array(p_km, dtype=float) * 1000.0
+        ecef2_m = np.array(p2_km, dtype=float) * 1000.0
+        vel_mps = (ecef2_m - ecef_m) / float(dt_vel_s)
+        el_max = float(elev[:, int(si)].max())
+        active.append(ActiveSat(name=sat.name, ecef_m=ecef_m, elev_ref_deg=el_max, ecef_vel_mps=vel_mps))
     return t0, active
 
 
 # -----------------------------
-# Satellite selection API
-# -----------------------------
-def sort_active_sats(
-    scenarioConfig: "ScenarioConfig",
-    *,
-    t0_utc: Optional[datetime] = None,
-    n_lat_anchors: int = 3,
-    n_lon_anchors: int = 3,
-    quality_mode: str = "sin",
-) -> tuple[datetime, List[ActiveSat]]:
-    """
-    Returns a UTC snapshot time and an ordered list of active satellites.
-
-    Supported satellite sources:
-      - source == "tle"    : real satellites from a TLE file
-      - source == "walker" : synthetic Walker-delta constellation
-
-    Ranking behavior is identical in both modes:
-      1) filter satellites visible above the elevation mask at any anchor,
-      2) greedily rank them by marginal anchor-quality gain,
-      3) append the remaining visible satellites by fallback total quality.
-    """
-    source = str(getattr(scenarioConfig.multisat, "source", "tle")).lower()
-    if source == "tle":
-        return _sort_active_sats_from_tle(
-            scenarioConfig,
-            t0_utc=t0_utc,
-            n_lat_anchors=n_lat_anchors,
-            n_lon_anchors=n_lon_anchors,
-            quality_mode=quality_mode,
-        )
-    if source == "walker":
-        return _sort_active_sats_from_walker(
-            scenarioConfig,
-            t0_utc=t0_utc,
-            n_lat_anchors=n_lat_anchors,
-            n_lon_anchors=n_lon_anchors,
-            quality_mode=quality_mode,
-        )
-    raise ValueError(f"Unknown multisat.source={source!r}. Expected 'tle' or 'walker'.")
-
-
-# -----------------------------
-# Association logic (unchanged)
+# Association logic
 # -----------------------------
 def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarray:
     """
@@ -386,22 +253,129 @@ def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarr
     -------
     elev_deg: (N,S)
     """
-    # Local up approximation: radial unit vector
-    up = unit(user_ecef_m)  # (N,3)
-
+    up = unit(user_ecef_m)
     N = user_ecef_m.shape[0]
     S = sat_ecef_m.shape[0]
     elev = np.empty((N, S), dtype=np.float32)
-
-    # For each sat: LOS from user->sat, unit LOS, elevation = asin(dot(LOS_hat, up))
     for s in range(S):
-        los = sat_ecef_m[s][None, :] - user_ecef_m          # (N,3)
-        los_hat = unit(los)                                 # (N,3)
-        sin_el = np.einsum("ij,ij->i", los_hat, up)         # (N,)
+        los = sat_ecef_m[s][None, :] - user_ecef_m
+        los_hat = unit(los)
+        sin_el = np.einsum("ij,ij->i", los_hat, up)
         sin_el = np.clip(sin_el, -1.0, 1.0)
         elev[:, s] = np.degrees(np.arcsin(sin_el)).astype(np.float32)
-
     return elev
+
+
+def _assign_best_valid(valid: np.ndarray, score: np.ndarray) -> np.ndarray:
+    N, S = valid.shape
+    masked = np.where(valid, score, -np.inf)
+    best = np.argmax(masked, axis=1).astype(np.int32)
+    has_valid = np.any(valid, axis=1)
+    assign = np.full(N, -1, dtype=np.int32)
+    assign[has_valid] = best[has_valid]
+    return assign
+
+
+def associate_users_pure_max_elev(
+    user_ecef_m: np.ndarray,
+    user_demand_mbps: np.ndarray,
+    user_qos_w: np.ndarray,
+    sat_ecef_m: np.ndarray,
+    elev_mask_deg: float,
+    load_mode: str = "demand",
+    slack: float = 0.15,
+) -> AssocResult:
+    elev = _elevations_deg(user_ecef_m, sat_ecef_m)
+    valid = elev >= float(elev_mask_deg)
+    assign = _assign_best_valid(valid, elev.astype(np.float64))
+    S = sat_ecef_m.shape[0]
+    w = _compute_load_weights(user_demand_mbps, user_qos_w, load_mode)
+    loads, cap = _loads_and_cap(assign, w, S, slack)
+    sat_user_ids = [np.where(assign == s)[0].astype(np.int32) for s in range(S)]
+    n_unserved = int((assign < 0).sum())
+    return AssocResult(assign=assign, sat_user_ids=sat_user_ids, loads=loads, cap=cap, n_unserved=n_unserved, n_moves=0)
+
+
+def _remaining_visibility_proxy_seconds(
+    user_ecef_m: np.ndarray,
+    sat_ecef_m: np.ndarray,
+    sat_vel_mps: np.ndarray,
+    elev_mask_deg: float,
+    dt_s: float = 5.0,
+    cap_s: float = 3600.0,
+) -> np.ndarray:
+    """
+    Cheap proxy for remaining visibility time inside a fixed snapshot prefix.
+
+    We approximate elevation derivative using linearly propagated satellite ECEF positions:
+      d(el)/dt ≈ (el(t+dt) - el(t))/dt,
+    then estimate time-to-mask for descending links.
+
+    Returned values are in seconds; higher is better.
+    Users/sats below mask get 0.
+    """
+    elev_now = _elevations_deg(user_ecef_m, sat_ecef_m).astype(np.float64)
+    valid = elev_now >= float(elev_mask_deg)
+
+    sat_ecef_next = sat_ecef_m + sat_vel_mps * float(dt_s)
+    elev_next = _elevations_deg(user_ecef_m, sat_ecef_next).astype(np.float64)
+    delev_dt = (elev_next - elev_now) / float(dt_s)
+
+    rem = np.zeros_like(elev_now, dtype=np.float64)
+
+    # Descending: linear time until mask
+    desc = valid & (delev_dt < -1e-6)
+    rem[desc] = np.maximum(0.0, (elev_now[desc] - float(elev_mask_deg)) / (-delev_dt[desc]))
+
+    # Flat or ascending: treat as long remaining life within capped horizon
+    non_desc = valid & ~desc
+    rem[non_desc] = float(cap_s)
+
+    rem = np.clip(rem, 0.0, float(cap_s))
+    return rem
+
+
+def associate_users_max_service_time(
+    user_ecef_m: np.ndarray,
+    user_demand_mbps: np.ndarray,
+    user_qos_w: np.ndarray,
+    sat_ecef_m: np.ndarray,
+    sat_vel_mps: Optional[np.ndarray],
+    elev_mask_deg: float,
+    load_mode: str = "demand",
+    slack: float = 0.15,
+) -> AssocResult:
+    if sat_vel_mps is None or sat_vel_mps.shape != sat_ecef_m.shape:
+        return associate_users_pure_max_elev(
+            user_ecef_m=user_ecef_m,
+            user_demand_mbps=user_demand_mbps,
+            user_qos_w=user_qos_w,
+            sat_ecef_m=sat_ecef_m,
+            elev_mask_deg=elev_mask_deg,
+            load_mode=load_mode,
+            slack=slack,
+        )
+
+    elev = _elevations_deg(user_ecef_m, sat_ecef_m).astype(np.float64)
+    valid = elev >= float(elev_mask_deg)
+    rem_s = _remaining_visibility_proxy_seconds(
+        user_ecef_m=user_ecef_m,
+        sat_ecef_m=sat_ecef_m,
+        sat_vel_mps=sat_vel_mps,
+        elev_mask_deg=elev_mask_deg,
+        dt_s=5.0,
+        cap_s=3600.0,
+    )
+    # Small elevation tie-breaker for deterministic behavior.
+    score = rem_s + 1e-3 * np.maximum(elev, 0.0)
+    assign = _assign_best_valid(valid, score)
+
+    S = sat_ecef_m.shape[0]
+    w = _compute_load_weights(user_demand_mbps, user_qos_w, load_mode)
+    loads, cap = _loads_and_cap(assign, w, S, slack)
+    sat_user_ids = [np.where(assign == s)[0].astype(np.int32) for s in range(S)]
+    n_unserved = int((assign < 0).sum())
+    return AssocResult(assign=assign, sat_user_ids=sat_user_ids, loads=loads, cap=cap, n_unserved=n_unserved, n_moves=0)
 
 
 def associate_users_balanced(
@@ -410,7 +384,7 @@ def associate_users_balanced(
     user_qos_w: np.ndarray,
     sat_ecef_m: np.ndarray,
     elev_mask_deg: float,
-    load_mode: str = "demand",   # "count" | "demand" | "wq_demand"
+    load_mode: str = "demand",  # "count" | "demand" | "wq_demand"
     slack: float = 0.15,
     max_rounds: int = 6,
     max_total_moves: int = 200000,
@@ -420,55 +394,27 @@ def associate_users_balanced(
     Balanced association:
       1) Assign each user to its best-elevation visible satellite
       2) Rebalance overloaded sats by moving 'cheap-to-move' users
-
-    Overcrowding model:
-      - Compute loads per satellite using load_mode
-      - Soft cap = (total_load / n_active_sats) * (1+slack)
-      - If a sat exceeds cap, move users to alternatives until under cap or stuck.
     """
-    rng = np.random.default_rng(seed)
-
+    _ = np.random.default_rng(seed)
     N = user_ecef_m.shape[0]
     S = sat_ecef_m.shape[0]
 
-    elev = _elevations_deg(user_ecef_m, sat_ecef_m)  # (N,S)
+    elev = _elevations_deg(user_ecef_m, sat_ecef_m)
     valid = elev >= float(elev_mask_deg)
 
-    # Preferences (best to worst elevation)
-    pref = np.argsort(-elev, axis=1)  # (N,S)
+    pref = np.argsort(-elev, axis=1)
     pref_valid = np.take_along_axis(valid, pref, axis=1)
-
     has_valid = pref_valid.any(axis=1)
-    first_pos = np.argmax(pref_valid, axis=1)  # 0 even if no valid; fix below
+    first_pos = np.argmax(pref_valid, axis=1)
 
     assign = np.full(N, -1, dtype=np.int32)
     rows = np.arange(N, dtype=np.int32)
     assign[has_valid] = pref[rows[has_valid], first_pos[has_valid]].astype(np.int32)
 
-    # Define per-user load weight
-    if load_mode == "count":
-        w = np.ones(N, dtype=np.float64)
-    elif load_mode == "demand":
-        w = user_demand_mbps.astype(np.float64)
-    elif load_mode == "wq_demand":
-        w = (user_demand_mbps.astype(np.float64) * user_qos_w.astype(np.float64))
-    else:
-        raise ValueError(f"Unknown load_mode={load_mode}")
+    w = _compute_load_weights(user_demand_mbps, user_qos_w, load_mode)
+    loads, cap = _loads_and_cap(assign, w, S, slack)
 
-    # Initial loads
-    loads = np.zeros(S, dtype=np.float64)
-    for s in range(S):
-        idx = np.where(assign == s)[0]
-        if idx.size:
-            loads[s] = float(w[idx].sum())
-
-    served_mask = assign >= 0
-    total_load = float(w[served_mask].sum())
-    cap = (total_load / max(S, 1)) * (1.0 + float(slack))
-
-    # Helper: find next feasible sat for user i given current sat s_cur
     def _next_sat(i: int, s_cur: int) -> int:
-        # scan ordered preferences; pick first valid != s_cur
         for k in range(S):
             s2 = int(pref[i, k])
             if s2 == s_cur:
@@ -478,80 +424,101 @@ def associate_users_balanced(
         return -1
 
     n_moves = 0
-
     for _round in range(max_rounds):
         overloaded = np.where(loads > cap)[0]
         if overloaded.size == 0:
             break
-
-        # Process overloaded sats in descending overload amount
         overloaded = overloaded[np.argsort(-(loads[overloaded] - cap))]
-
         moved_this_round = 0
-
         for s in overloaded:
             if n_moves >= max_total_moves:
                 break
-            # Users currently assigned to this sat
             users_s = np.where(assign == s)[0]
             if users_s.size == 0:
                 continue
-
-            # For each user, compute "switch cost" to next best sat:
-            # delta_elev = elev(best) - elev(next)
-            # Move smallest delta first.
             alt = np.array([_next_sat(int(i), int(s)) for i in users_s], dtype=np.int32)
             ok = alt >= 0
             if not np.any(ok):
                 continue
-
             cand_users = users_s[ok]
             cand_alt = alt[ok]
-
             delta = elev[cand_users, s] - elev[cand_users, cand_alt]
             order = np.argsort(delta, kind="mergesort")
-
             for idx_in_order in order:
                 if loads[s] <= cap:
                     break
                 if n_moves >= max_total_moves:
                     break
-
                 i = int(cand_users[idx_in_order])
                 s2 = int(cand_alt[idx_in_order])
-
-                # If target also overloaded, try to find a better target among valid ones
-                # Choose the valid sat with minimum load (excluding s).
                 if loads[s2] > cap:
                     valid_sats = np.where(valid[i])[0]
                     valid_sats = valid_sats[valid_sats != s]
                     if valid_sats.size == 0:
                         continue
                     s2 = int(valid_sats[np.argmin(loads[valid_sats])])
-
-                # perform move
                 assign[i] = s2
                 wi = float(w[i])
                 loads[s] -= wi
                 loads[s2] += wi
                 n_moves += 1
                 moved_this_round += 1
-
         if moved_this_round == 0:
             break
 
-    # Build sat->user lists
-    sat_user_ids: List[np.ndarray] = []
-    for s in range(S):
-        sat_user_ids.append(np.where(assign == s)[0].astype(np.int32))
-
+    sat_user_ids = [np.where(assign == s)[0].astype(np.int32) for s in range(S)]
     n_unserved = int((assign < 0).sum())
+    return AssocResult(assign=assign, sat_user_ids=sat_user_ids, loads=loads, cap=float(cap), n_unserved=n_unserved, n_moves=int(n_moves))
 
-    return AssocResult(
-        assign=assign,
-        sat_user_ids=sat_user_ids,
-        loads=loads,
-        cap=float(cap),
-        n_unserved=n_unserved,
-        n_moves=int(n_moves),
-    )
+
+def associate_users_by_rule(
+    rule: str,
+    *,
+    user_ecef_m: np.ndarray,
+    user_demand_mbps: np.ndarray,
+    user_qos_w: np.ndarray,
+    sat_ecef_m: np.ndarray,
+    sat_vel_mps: Optional[np.ndarray],
+    elev_mask_deg: float,
+    load_mode: str = "demand",
+    slack: float = 0.15,
+    max_rounds: int = 6,
+    max_total_moves: int = 200000,
+    seed: int = 1,
+) -> AssocResult:
+    rule = str(rule).strip().lower()
+    if rule in {"balanced_max_elev", "balanced", "max_elev_balanced"}:
+        return associate_users_balanced(
+            user_ecef_m=user_ecef_m,
+            user_demand_mbps=user_demand_mbps,
+            user_qos_w=user_qos_w,
+            sat_ecef_m=sat_ecef_m,
+            elev_mask_deg=elev_mask_deg,
+            load_mode=load_mode,
+            slack=slack,
+            max_rounds=max_rounds,
+            max_total_moves=max_total_moves,
+            seed=seed,
+        )
+    if rule in {"pure_max_elev", "max_elev", "max_elevation"}:
+        return associate_users_pure_max_elev(
+            user_ecef_m=user_ecef_m,
+            user_demand_mbps=user_demand_mbps,
+            user_qos_w=user_qos_w,
+            sat_ecef_m=sat_ecef_m,
+            elev_mask_deg=elev_mask_deg,
+            load_mode=load_mode,
+            slack=slack,
+        )
+    if rule in {"max_service_time", "service_time", "max_dur", "max_duration"}:
+        return associate_users_max_service_time(
+            user_ecef_m=user_ecef_m,
+            user_demand_mbps=user_demand_mbps,
+            user_qos_w=user_qos_w,
+            sat_ecef_m=sat_ecef_m,
+            sat_vel_mps=sat_vel_mps,
+            elev_mask_deg=elev_mask_deg,
+            load_mode=load_mode,
+            slack=slack,
+        )
+    raise ValueError(f"Unknown association rule: {rule}")

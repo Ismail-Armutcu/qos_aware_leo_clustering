@@ -78,7 +78,7 @@ class LoadBalanceRefineConfig:
     k_users_from_donor: int = 20
     intersect_margin_m: float = 0.1
     objective: str = "max"
-    prefer_non_enterprise: bool = False
+    prefer_non_enterprise: bool = True
     risk_slack: float = 1e-4
     exposure_slack: int = 0
     allow_receiver_close_to_full: bool = False

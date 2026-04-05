@@ -13,7 +13,7 @@ from .compute import MILPPrecomputedData
 
 @dataclass(frozen=True)
 class MILPSolveConfig:
-    time_limit_s: float = 300.0
+    time_limit_s: float = 3000.0
     mip_gap: float = 0.0
     threads: Optional[int] = None
     log_to_console: bool = True

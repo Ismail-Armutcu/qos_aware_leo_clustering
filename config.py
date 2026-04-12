@@ -127,7 +127,7 @@ class WalkerConfig:
 @dataclass(frozen=True)
 class MultiSatConfig:
     # Satellite source: real TLEs or synthetic Walker-delta constellation.
-    source: Literal["tle", "walker"] = "tle"
+    source: Literal["tle", "walker"] = "walker"
 
     # TLE source configuration (used when source == "tle")
     tle_path: str = "starlink.tle"

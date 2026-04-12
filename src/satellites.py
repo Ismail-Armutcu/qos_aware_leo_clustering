@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 
-from src.coords import unit
+from src.coords import llh_to_ecef, unit
 
 if TYPE_CHECKING:
     from config import ScenarioConfig, BBox
+
+# -----------------------------
+# Constants
+# -----------------------------
+EARTH_RADIUS_M = 6_371_000.0
+MU_EARTH_M3_S2 = 3.986004418e14
+SIDEREAL_DAY_S = 86164.0905
+EARTH_ROT_RATE_RAD_S = 2.0 * np.pi / SIDEREAL_DAY_S
 
 
 # -----------------------------
@@ -88,6 +96,37 @@ def _build_anchor_grid(bbox: "BBox", n_lat: int = 3, n_lon: int = 3) -> List[Anc
     return anchors
 
 
+def _anchors_to_ecef_m(anchors: Sequence[Anchor]) -> np.ndarray:
+    lat = np.array([a.lat_deg for a in anchors], dtype=float)
+    lon = np.array([a.lon_deg for a in anchors], dtype=float)
+    h = np.array([a.height_m for a in anchors], dtype=float)
+    return np.asarray(llh_to_ecef(lat, lon, h), dtype=float)
+
+
+def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarray:
+    """
+    Compute elevation angles for all user-sat pairs.
+
+    user_ecef_m: (N,3)
+    sat_ecef_m : (S,3)
+
+    Returns
+    -------
+    elev_deg: (N,S)
+    """
+    up = unit(user_ecef_m)
+    N = user_ecef_m.shape[0]
+    S = sat_ecef_m.shape[0]
+    elev = np.empty((N, S), dtype=np.float32)
+    for s in range(S):
+        los = sat_ecef_m[s][None, :] - user_ecef_m
+        los_hat = unit(los)
+        sin_el = np.einsum("ij,ij->i", los_hat, up)
+        sin_el = np.clip(sin_el, -1.0, 1.0)
+        elev[:, s] = np.degrees(np.arcsin(sin_el)).astype(np.float32)
+    return elev
+
+
 def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "sin") -> np.ndarray:
     """
     Convert elevation (deg) to a nonnegative quality q, with q=0 below mask.
@@ -114,9 +153,9 @@ def _quality_from_elev_deg(elev_deg: np.ndarray, emin_deg: float, mode: str = "s
 
 
 def _compute_load_weights(
-    user_demand_mbps: np.ndarray,
-    user_qos_w: np.ndarray,
-    load_mode: str,
+        user_demand_mbps: np.ndarray,
+        user_qos_w: np.ndarray,
+        load_mode: str,
 ) -> np.ndarray:
     if load_mode == "count":
         return np.ones(user_demand_mbps.shape[0], dtype=np.float64)
@@ -139,70 +178,80 @@ def _loads_and_cap(assign: np.ndarray, w: np.ndarray, S: int, slack: float) -> t
     return loads, float(cap)
 
 
-# -----------------------------
-# Satellite selection API
-# -----------------------------
-def sort_active_sats(
-    scenarioConfig: "ScenarioConfig",
-    *,
-    t0_utc: Optional[datetime] = None,
-    n_lat_anchors: int = 3,
-    n_lon_anchors: int = 3,
-    quality_mode: str = "sin",
-) -> tuple[datetime, List[ActiveSat]]:
+def _walker_mean_motion_rad_s(altitude_m: float) -> float:
+    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
+    return float(np.sqrt(MU_EARTH_M3_S2 / (r_orbit_m ** 3)))
+
+
+def _walker_delta_elements(total_sats: int, n_planes: int, phasing: int, inc_deg: float) -> list[
+    tuple[str, float, float, float]]:
     """
-    Load a TLE file, choose a snapshot time t0, then select active satellites using:
-      (1) Multi-anchor visibility filter
-      (2) Greedy marginal-gain ordering over anchor quality
-
-    Returns
-    -------
-    (t0_utc, active_sats)
+    Walker-delta constellation definition.
+    Returns a list of tuples: (name, RAAN_rad, inc_rad, M0_rad)
     """
-    from skyfield.api import load, wgs84
-    from skyfield.framelib import itrs
+    T = int(total_sats)
+    P = int(n_planes)
+    F = int(phasing)
+    if T <= 0 or P <= 0:
+        raise ValueError("Walker parameters must satisfy total_sats > 0 and n_planes > 0.")
+    if T % P != 0:
+        raise ValueError(f"Walker-delta requires total_sats divisible by n_planes, got T={T}, P={P}.")
 
-    tle_path = scenarioConfig.multisat.tle_path
-    emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
-    bbox = scenarioConfig.bbox
+    sats_per_plane = T // P
+    inc = float(np.deg2rad(inc_deg))
+    elems: list[tuple[str, float, float, float]] = []
+    for p in range(P):
+        raan = 2.0 * np.pi * p / P
+        for s in range(sats_per_plane):
+            M0 = 2.0 * np.pi * s / sats_per_plane + 2.0 * np.pi * F * p / T
+            elems.append((f"WALKER-P{p:02d}-S{s:02d}", float(raan), inc, float(M0)))
+    return elems
 
-    ts = load.timescale()
-    sats = load.tle_file(tle_path)
-    if len(sats) == 0:
-        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
 
-    if t0_utc is not None:
-        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
-    elif scenarioConfig.multisat.time_utc_iso is not None:
-        t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
-    else:
-        t0 = _choose_snapshot_time_utc(sats)
+def _walker_sat_ecef_m(raan_rad: float, inc_rad: float, M0_rad: float, dt_s: float, altitude_m: float) -> np.ndarray:
+    """
+    Circular-orbit Walker satellite propagated from the reference epoch into ECEF.
+    """
+    r_orbit_m = EARTH_RADIUS_M + float(altitude_m)
+    n = _walker_mean_motion_rad_s(altitude_m)
+    u = float(M0_rad + n * dt_s)
 
-    t = ts.from_datetime(t0)
-    dt_vel_s = 5.0
-    t0_vel = t0 + __import__('datetime').timedelta(seconds=dt_vel_s)
-    t2 = ts.from_datetime(t0_vel)
+    cosO = float(np.cos(raan_rad))
+    sinO = float(np.sin(raan_rad))
+    cosi = float(np.cos(inc_rad))
+    sini = float(np.sin(inc_rad))
+    cosu = float(np.cos(u))
+    sinu = float(np.sin(u))
 
-    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
-    P = len(anchors)
-    N = len(sats)
-    obs = [wgs84.latlon(a.lat_deg, a.lon_deg, elevation_m=a.height_m) for a in anchors]
+    x_eci = r_orbit_m * (cosO * cosu - sinO * sinu * cosi)
+    y_eci = r_orbit_m * (sinO * cosu + cosO * sinu * cosi)
+    z_eci = r_orbit_m * (sinu * sini)
 
-    elev = np.empty((P, N), dtype=np.float32)
-    for si, sat in enumerate(sats):
-        for pi, o in enumerate(obs):
-            alt, _, _ = (sat - o).at(t).altaz()
-            elev[pi, si] = float(alt.degrees)
+    theta = EARTH_ROT_RATE_RAD_S * float(dt_s)
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
 
-    cand_mask = (elev >= emin_deg).any(axis=0)
+    x_ecef = c * x_eci + s * y_eci
+    y_ecef = -s * x_eci + c * y_eci
+    return np.array([x_ecef, y_ecef, z_eci], dtype=float)
+
+
+def _rank_visible_sats(elev: np.ndarray, emin_deg: float, quality_mode: str = "sin") -> np.ndarray:
+    """
+    Given an elevation matrix (P_anchors, N_sats), find sats visible above emin_deg
+    at any anchor, and rank them greedily by marginal anchor-quality gain.
+    Returns array of selected original satellite indices.
+    """
+    cand_mask = (elev >= float(emin_deg)).any(axis=0)
     cand_idx = np.where(cand_mask)[0]
     if cand_idx.size == 0:
-        return t0, []
+        return np.array([], dtype=int)
 
     elev_c = elev[:, cand_idx].astype(np.float64)
     q = _quality_from_elev_deg(elev_c, emin_deg=emin_deg, mode=quality_mode)
 
     Mc = q.shape[1]
+    P = q.shape[0]
     best = np.zeros(P, dtype=np.float64)
     chosen = np.zeros(Mc, dtype=bool)
     order_local: List[int] = []
@@ -224,7 +273,56 @@ def sort_active_sats(
         rem_order = remaining[np.argsort(-rem_score, kind="mergesort")]
         order_local.extend(rem_order.tolist())
 
-    selected_sat_idx = cand_idx[np.array(order_local, dtype=int)]
+    return cand_idx[np.array(order_local, dtype=int)]
+
+
+# -----------------------------
+# Satellite selection API
+# -----------------------------
+def _sort_active_sats_from_tle(
+        scenarioConfig: "ScenarioConfig",
+        *,
+        t0_utc: Optional[datetime],
+        n_lat_anchors: int,
+        n_lon_anchors: int,
+        quality_mode: str,
+) -> tuple[datetime, List[ActiveSat]]:
+    from skyfield.api import load, wgs84
+    from skyfield.framelib import itrs
+
+    tle_path = scenarioConfig.multisat.tle_path
+    emin_deg = float(scenarioConfig.multisat.elev_mask_deg)
+    bbox = scenarioConfig.bbox
+
+    ts = load.timescale()
+    sats = load.tle_file(tle_path)
+    if len(sats) == 0:
+        raise RuntimeError(f"No satellites loaded from TLE file: {tle_path}")
+
+    if t0_utc is not None:
+        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
+    elif scenarioConfig.multisat.time_utc_iso is not None:
+        t0 = _parse_utc_iso(scenarioConfig.multisat.time_utc_iso)
+    else:
+        t0 = _choose_snapshot_time_utc(sats)
+
+    t = ts.from_datetime(t0)
+    dt_vel_s = 5.0
+    t0_vel = t0 + timedelta(seconds=dt_vel_s)
+    t2 = ts.from_datetime(t0_vel)
+
+    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
+    P = len(anchors)
+    N = len(sats)
+    obs = [wgs84.latlon(a.lat_deg, a.lon_deg, elevation_m=a.height_m) for a in anchors]
+
+    elev = np.empty((P, N), dtype=np.float32)
+    for si, sat in enumerate(sats):
+        for pi, o in enumerate(obs):
+            alt, _, _ = (sat - o).at(t).altaz()
+            elev[pi, si] = float(alt.degrees)
+
+    selected_sat_idx = _rank_visible_sats(elev, emin_deg, quality_mode)
 
     active: List[ActiveSat] = []
     for si in selected_sat_idx:
@@ -236,36 +334,109 @@ def sort_active_sats(
         vel_mps = (ecef2_m - ecef_m) / float(dt_vel_s)
         el_max = float(elev[:, int(si)].max())
         active.append(ActiveSat(name=sat.name, ecef_m=ecef_m, elev_ref_deg=el_max, ecef_vel_mps=vel_mps))
+
     return t0, active
+
+
+def _sort_active_sats_from_walker(
+        scenarioConfig: "ScenarioConfig",
+        *,
+        t0_utc: Optional[datetime],
+        n_lat_anchors: int,
+        n_lon_anchors: int,
+        quality_mode: str,
+) -> tuple[datetime, List[ActiveSat]]:
+    ms = scenarioConfig.multisat
+    walker = ms.walker
+    emin_deg = float(ms.elev_mask_deg)
+    bbox = scenarioConfig.bbox
+
+    epoch_utc = _parse_utc_iso(walker.epoch_utc_iso)
+    if t0_utc is not None:
+        t0 = t0_utc.astimezone(timezone.utc) if t0_utc.tzinfo else t0_utc.replace(tzinfo=timezone.utc)
+    elif ms.time_utc_iso is not None:
+        t0 = _parse_utc_iso(ms.time_utc_iso)
+    else:
+        t0 = epoch_utc
+
+    dt_s = float((t0 - epoch_utc).total_seconds())
+    dt_vel_s = 5.0  # Propagate ahead for velocity proxy
+
+    elems = _walker_delta_elements(
+        total_sats=int(walker.total_sats),
+        n_planes=int(walker.n_planes),
+        phasing=int(walker.phasing),
+        inc_deg=float(walker.inclination_deg),
+    )
+
+    sat_names = [name for name, _, _, _ in elems]
+    sat_ecef_m = np.stack([
+        _walker_sat_ecef_m(raan, inc, M0, dt_s, float(walker.altitude_m))
+        for _, raan, inc, M0 in elems
+    ], axis=0)
+
+    anchors = _build_anchor_grid(bbox, n_lat=n_lat_anchors, n_lon=n_lon_anchors)
+    anchor_ecef_m = _anchors_to_ecef_m(anchors)
+
+    elev = _elevations_deg(anchor_ecef_m, sat_ecef_m)
+    selected_sat_idx = _rank_visible_sats(elev, emin_deg, quality_mode)
+
+    active: List[ActiveSat] = []
+    for si in selected_sat_idx:
+        _, raan, inc, M0 = elems[si]
+        ecef_m = sat_ecef_m[si]
+        ecef2_m = _walker_sat_ecef_m(raan, inc, M0, dt_s + dt_vel_s, float(walker.altitude_m))
+        vel_mps = (ecef2_m - ecef_m) / dt_vel_s
+        el_max = float(elev[:, si].max())
+
+        active.append(ActiveSat(
+            name=sat_names[si],
+            ecef_m=ecef_m,
+            elev_ref_deg=el_max,
+            ecef_vel_mps=vel_mps
+        ))
+
+    return t0, active
+
+
+def sort_active_sats(
+        scenarioConfig: "ScenarioConfig",
+        *,
+        t0_utc: Optional[datetime] = None,
+        n_lat_anchors: int = 3,
+        n_lon_anchors: int = 3,
+        quality_mode: str = "sin",
+) -> tuple[datetime, List[ActiveSat]]:
+    """
+    Returns a UTC snapshot time and an ordered list of active satellites.
+
+    Supported satellite sources:
+      - source == "tle"    : real satellites from a TLE file
+      - source == "walker" : synthetic Walker-delta constellation
+    """
+    source = str(getattr(scenarioConfig.multisat, "source", "tle")).lower()
+    if source == "tle":
+        return _sort_active_sats_from_tle(
+            scenarioConfig,
+            t0_utc=t0_utc,
+            n_lat_anchors=n_lat_anchors,
+            n_lon_anchors=n_lon_anchors,
+            quality_mode=quality_mode,
+        )
+    if source == "walker":
+        return _sort_active_sats_from_walker(
+            scenarioConfig,
+            t0_utc=t0_utc,
+            n_lat_anchors=n_lat_anchors,
+            n_lon_anchors=n_lon_anchors,
+            quality_mode=quality_mode,
+        )
+    raise ValueError(f"Unknown multisat.source={source!r}. Expected 'tle' or 'walker'.")
 
 
 # -----------------------------
 # Association logic
 # -----------------------------
-def _elevations_deg(user_ecef_m: np.ndarray, sat_ecef_m: np.ndarray) -> np.ndarray:
-    """
-    Compute elevation angles for all user-sat pairs.
-
-    user_ecef_m: (N,3)
-    sat_ecef_m : (S,3)
-
-    Returns
-    -------
-    elev_deg: (N,S)
-    """
-    up = unit(user_ecef_m)
-    N = user_ecef_m.shape[0]
-    S = sat_ecef_m.shape[0]
-    elev = np.empty((N, S), dtype=np.float32)
-    for s in range(S):
-        los = sat_ecef_m[s][None, :] - user_ecef_m
-        los_hat = unit(los)
-        sin_el = np.einsum("ij,ij->i", los_hat, up)
-        sin_el = np.clip(sin_el, -1.0, 1.0)
-        elev[:, s] = np.degrees(np.arcsin(sin_el)).astype(np.float32)
-    return elev
-
-
 def _assign_best_valid(valid: np.ndarray, score: np.ndarray) -> np.ndarray:
     N, S = valid.shape
     masked = np.where(valid, score, -np.inf)
@@ -277,13 +448,13 @@ def _assign_best_valid(valid: np.ndarray, score: np.ndarray) -> np.ndarray:
 
 
 def associate_users_pure_max_elev(
-    user_ecef_m: np.ndarray,
-    user_demand_mbps: np.ndarray,
-    user_qos_w: np.ndarray,
-    sat_ecef_m: np.ndarray,
-    elev_mask_deg: float,
-    load_mode: str = "demand",
-    slack: float = 0.15,
+        user_ecef_m: np.ndarray,
+        user_demand_mbps: np.ndarray,
+        user_qos_w: np.ndarray,
+        sat_ecef_m: np.ndarray,
+        elev_mask_deg: float,
+        load_mode: str = "demand",
+        slack: float = 0.15,
 ) -> AssocResult:
     elev = _elevations_deg(user_ecef_m, sat_ecef_m)
     valid = elev >= float(elev_mask_deg)
@@ -297,22 +468,15 @@ def associate_users_pure_max_elev(
 
 
 def _remaining_visibility_proxy_seconds(
-    user_ecef_m: np.ndarray,
-    sat_ecef_m: np.ndarray,
-    sat_vel_mps: np.ndarray,
-    elev_mask_deg: float,
-    dt_s: float = 5.0,
-    cap_s: float = 3600.0,
+        user_ecef_m: np.ndarray,
+        sat_ecef_m: np.ndarray,
+        sat_vel_mps: np.ndarray,
+        elev_mask_deg: float,
+        dt_s: float = 5.0,
+        cap_s: float = 3600.0,
 ) -> np.ndarray:
     """
     Cheap proxy for remaining visibility time inside a fixed snapshot prefix.
-
-    We approximate elevation derivative using linearly propagated satellite ECEF positions:
-      d(el)/dt ≈ (el(t+dt) - el(t))/dt,
-    then estimate time-to-mask for descending links.
-
-    Returned values are in seconds; higher is better.
-    Users/sats below mask get 0.
     """
     elev_now = _elevations_deg(user_ecef_m, sat_ecef_m).astype(np.float64)
     valid = elev_now >= float(elev_mask_deg)
@@ -336,14 +500,14 @@ def _remaining_visibility_proxy_seconds(
 
 
 def associate_users_max_service_time(
-    user_ecef_m: np.ndarray,
-    user_demand_mbps: np.ndarray,
-    user_qos_w: np.ndarray,
-    sat_ecef_m: np.ndarray,
-    sat_vel_mps: Optional[np.ndarray],
-    elev_mask_deg: float,
-    load_mode: str = "demand",
-    slack: float = 0.15,
+        user_ecef_m: np.ndarray,
+        user_demand_mbps: np.ndarray,
+        user_qos_w: np.ndarray,
+        sat_ecef_m: np.ndarray,
+        sat_vel_mps: Optional[np.ndarray],
+        elev_mask_deg: float,
+        load_mode: str = "demand",
+        slack: float = 0.15,
 ) -> AssocResult:
     if sat_vel_mps is None or sat_vel_mps.shape != sat_ecef_m.shape:
         return associate_users_pure_max_elev(
@@ -379,16 +543,16 @@ def associate_users_max_service_time(
 
 
 def associate_users_balanced(
-    user_ecef_m: np.ndarray,
-    user_demand_mbps: np.ndarray,
-    user_qos_w: np.ndarray,
-    sat_ecef_m: np.ndarray,
-    elev_mask_deg: float,
-    load_mode: str = "demand",  # "count" | "demand" | "wq_demand"
-    slack: float = 0.15,
-    max_rounds: int = 6,
-    max_total_moves: int = 200000,
-    seed: int = 1,
+        user_ecef_m: np.ndarray,
+        user_demand_mbps: np.ndarray,
+        user_qos_w: np.ndarray,
+        sat_ecef_m: np.ndarray,
+        elev_mask_deg: float,
+        load_mode: str = "demand",  # "count" | "demand" | "wq_demand"
+        slack: float = 0.15,
+        max_rounds: int = 6,
+        max_total_moves: int = 200000,
+        seed: int = 1,
 ) -> AssocResult:
     """
     Balanced association:
@@ -468,23 +632,24 @@ def associate_users_balanced(
 
     sat_user_ids = [np.where(assign == s)[0].astype(np.int32) for s in range(S)]
     n_unserved = int((assign < 0).sum())
-    return AssocResult(assign=assign, sat_user_ids=sat_user_ids, loads=loads, cap=float(cap), n_unserved=n_unserved, n_moves=int(n_moves))
+    return AssocResult(assign=assign, sat_user_ids=sat_user_ids, loads=loads, cap=float(cap), n_unserved=n_unserved,
+                       n_moves=int(n_moves))
 
 
 def associate_users_by_rule(
-    rule: str,
-    *,
-    user_ecef_m: np.ndarray,
-    user_demand_mbps: np.ndarray,
-    user_qos_w: np.ndarray,
-    sat_ecef_m: np.ndarray,
-    sat_vel_mps: Optional[np.ndarray],
-    elev_mask_deg: float,
-    load_mode: str = "demand",
-    slack: float = 0.15,
-    max_rounds: int = 6,
-    max_total_moves: int = 200000,
-    seed: int = 1,
+        rule: str,
+        *,
+        user_ecef_m: np.ndarray,
+        user_demand_mbps: np.ndarray,
+        user_qos_w: np.ndarray,
+        sat_ecef_m: np.ndarray,
+        sat_vel_mps: Optional[np.ndarray],
+        elev_mask_deg: float,
+        load_mode: str = "demand",
+        slack: float = 0.15,
+        max_rounds: int = 6,
+        max_total_moves: int = 200000,
+        seed: int = 1,
 ) -> AssocResult:
     rule = str(rule).strip().lower()
     if rule in {"balanced_max_elev", "balanced", "max_elev_balanced"}:

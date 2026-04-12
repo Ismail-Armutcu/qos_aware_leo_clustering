@@ -1,843 +1,358 @@
 # QoS-Aware User Clustering for LEO Satellite Networks
 
-A high-performance Python framework for QoS-aware beam placement and user clustering in Low Earth Orbit (LEO) satellite networks, with support for multi-satellite constellations, heterogeneous QoS requirements, and real-time TLE-based satellite tracking.
+This repository is a Python research prototype for LEO satellite user association,
+beam placement, QoS-aware refinement, payload feasibility checks, and MILP-based
+benchmarking.
 
----
+The current code models one static user/satellite snapshot. It generates users
+over a Turkey or debug bounding box, selects visible satellites from either a
+synthetic Walker-delta constellation or a TLE file, assigns users to satellites,
+clusters users into beams, refines beam membership, and checks satellite payload
+limits. It also includes scripts for scaling sweeps, sensitivity studies, and a
+Gurobi MILP comparison.
 
-## Table of Contents
+## What Is In The Repo
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Architecture](#architecture)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Core Modules](#core-modules)
-- [Algorithm Pipeline](#algorithm-pipeline)
-- [Baseline Comparisons](#baseline-comparisons)
-- [Configuration](#configuration)
-- [Output & Visualization](#output--visualization)
-- [Performance Optimization](#performance-optimization)
-- [Research Applications](#research-applications)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## Overview
-
-This framework addresses the challenging problem of **dynamic beam placement** in LEO satellite networks where users have **heterogeneous Quality of Service (QoS) requirements**. It provides:
-
-1. **QoS-differentiated clustering**: Eco (w=1), Standard (w=2), and Enterprise (w=4) user tiers
-2. **Multi-satellite constellation support**: Real-time TLE-based satellite selection and tracking
-3. **Balanced load distribution**: Advanced user-to-satellite association with load balancing
-4. **Enterprise edge protection**: Special refinement to keep high-priority users away from beam edges
-5. **Capacity-aware beam sizing**: Discrete footprint radius modes with Shannon capacity constraints
-6. **Comprehensive baselines**: Includes implementations of Weighted K-Means, BK-Means, and TGBP algorithms
-
-The system models realistic physical layer characteristics including free-space path loss, Gaussian antenna patterns, and Shannon capacity under thermal noise constraints.
-
----
-
-## Key Features
-
-### 🌍 **Geographic Coverage**
-- **Configurable regions**: Turkey (default), debug regions, or custom bounding boxes
-- **Hotspot generation**: Realistic user distributions with Gaussian hotspots and noise overlay
-- **Coordinate systems**: Seamless conversion between geodetic (lat/lon), local tangent plane (XY), and ECEF coordinates
-
-### 🛰️ **Multi-Satellite Support**
-- **TLE-based tracking**: Load real satellite constellations from TLE files
-- **Elevation masking**: Configurable minimum elevation angles (default: 25°)
-- **Smart selection**: Top-N satellites by elevation at reference site
-- **Balanced association**: Minimize load imbalance across satellites using demand-weighted or QoS-weighted metrics
-
-### 📡 **Physical Layer Modeling**
-- **Frequency**: 20 GHz Ka-band (configurable)
-- **Bandwidth**: 250 MHz (configurable)
-- **EIRP**: 40 dBW (configurable)
-- **Beam patterns**: Gaussian antenna model with -3 dB beamwidth
-- **Footprint modes**: Discrete radius options (default: 5, 10, 15, 20 km)
-- **Shannon capacity**: Time-division multiple access with weighted demand sharing
-
-### 🎯 **QoS Differentiation**
-- **Eco (w=1)**: 60% probability, basic service
-- **Standard (w=2)**: 30% probability, medium priority
-- **Enterprise (w=4)**: 10% probability, mission-critical service with edge-risk penalties
-
-### ⚡ **Performance Optimizations**
-- **Parallel execution**: Multi-core scenario sweeps using ProcessPoolExecutor
-- **Incremental evaluation**: Frozen beam geometry during load-balance refinement
-- **Grid-based adjacency**: Fast overlap detection for refinement
-- **Efficient data structures**: NumPy vectorization throughout
-- **Profiling support**: Built-in timing and operation counters
-
----
-
-## Architecture
-
-```
-qos_aware_user_clustering/
-│
-├── main.py                          # Entry point: parallel sweeps, plotting
-├── config.py                        # Comprehensive configuration dataclasses
-│
-├── src/
-│   ├── pipeline.py                  # Main orchestration: multi-sat workflow
-│   ├── models.py                    # Data structures: User, Users, UsersRaw
-│   ├── usergen.py                   # User generation with hotspots
-│   ├── satellites.py                # TLE loading, selection, association
-│   ├── coords.py                    # Coordinate transformations (geodetic/ECEF/XY)
-│   ├── phy.py                       # Physical layer: FSPL, gain, SNR, Shannon
-│   ├── evaluator.py                 # Cluster feasibility evaluation
-│   ├── split.py                     # Farthest-point bisection
-│   ├── refine_qos_angle.py          # Enterprise edge refinement (angle-based)
-│   ├── refine_load_balance.py       # Load-balance refinement (overlap-based)
-│   ├── helper.py                    # Summary KPIs, CSV I/O, config printing
-│   ├── plot.py                      # Visualization: user scatter, beam overlays
-│   ├── sweep_plots.py               # Aggregate plot generation (Phase A/B)
-│   ├── profiling.py                 # Timing and counter profiler
-│   │
-│   └── baselines/
-│       ├── weighted_kmeans.py       # Weighted K-Means++ (demand, demand*QoS)
-│       ├── fast_beam_placement.py   # BK-Means & TGBP from FastBP paper
-│       └── repair.py                # Strict split-until-feasible repair
-│
-├── plots/                           # Generated visualizations (Phase A/B)
-├── sweep_phaseA.csv                 # Robustness results (10 seeds)
-├── sweep_phaseB.csv                 # Scaling results (1k-10k users)
-├── .gitignore                       # Excludes plots/, .idea/, __pycache__
-└── README.md                        # This file
+```text
+.
+|-- config.py                  # Scenario, PHY, user, satellite, and payload config
+|-- main.py                    # Current Phase B scaling sweep runner
+|-- run_sensitivity.py         # Editable sensitivity-study runner
+|-- run_milp_smoke.py          # Small MILP smoke run
+|-- run_milp_compare.py        # Heuristic vs MILP comparison and grid sensitivity
+|-- starlink.tle               # TLE data for multisat.source="tle" experiments
+|-- sweep_phaseA.csv           # Existing generated sweep output
+|-- sweep_phaseB.csv           # Existing/current Phase B sweep output
+|-- milp_compare.csv           # Existing/generated MILP comparison output
+|-- milp_compare_aggregate.csv # Existing/generated MILP aggregate output
+|-- plots/                     # Generated plots and tables
+|-- sensitivity_results/       # Generated sensitivity-study outputs
+`-- src/
+    |-- pipeline.py            # Main heuristic pipeline and comparisons
+    |-- satellites.py          # Walker/TLE satellite ranking and user association
+    |-- evaluator.py           # Beam geometry, PHY rate, and capacity checks
+    |-- usergen.py             # Hotspot/uniform user generation
+    |-- models.py              # User containers
+    |-- coords.py              # LLH, ECEF, and local XY transforms
+    |-- phy.py                 # FSPL, antenna gain, SNR, Shannon rate
+    |-- split.py               # Farthest-point bisection
+    |-- refine_qos_angle.py    # Enterprise edge-risk refinement
+    |-- refine_load_balance.py # Overlap-based load-balance refinement
+    |-- helper.py              # Summary, flattening, CSV helpers
+    |-- plot.py                # Plotting helpers for scenario visualizations
+    |-- sweep_plots.py         # Phase B aggregate plot/table generation
+    |-- baselines/
+    |   |-- weighted_kmeans.py
+    |   |-- fast_beam_placement.py
+    |   `-- repair.py
+    `-- milp/
+        |-- prepare.py
+        |-- candidates.py
+        |-- compute.py
+        |-- model.py
+        `-- runner.py
 ```
 
----
+## Main Model
+
+The heuristic pipeline in `src/pipeline.py` runs several comparable variants of
+the same system:
+
+1. Generate users with QoS classes and demand.
+2. Rank visible satellites from `multisat.source`.
+3. Search over prefixes of the ranked satellite list to find the smallest
+   payload-feasible active set.
+4. Associate users to satellites using `balanced_max_elev` for the proposed
+   pipeline.
+5. Cluster each satellite's users with recursive farthest-point splitting until
+   every cluster is feasible.
+6. Optionally move enterprise users away from beam edges.
+7. Optionally move users between overlapping beams to reduce load imbalance.
+8. Repair or offload whole beams between satellites to satisfy payload limits.
+9. Run system-level association comparisons, ablations, and baselines.
+
+The beam model is fixed-angle, not fixed-radius. For each beam center:
+
+```text
+R_m = d_center * tan(theta_3db)
+```
+
+where `d_center` is the satellite-to-beam-center slant range and
+`theta_3db` comes from `cfg.beam.theta_3db_deg`.
+
+Beam capacity uses a time-share quantity:
+
+```text
+U = sum(demand_mbps / rate_mbps)
+```
+
+A beam is feasible when geometry holds and `U <= cfg.payload.W_slots`.
+Satellite payload feasibility then checks:
+
+```text
+sum_beam U <= cfg.payload.J_lanes * cfg.payload.W_slots
+K_sat <= cfg.payload.Ks_max
+```
+
+QoS classes are generated as weights `1`, `2`, and `4`. QoS is used for demand
+conditioning, enterprise edge-risk accounting, and optional association load
+weighting. The default association load mode is physical demand, not
+`demand * qos`.
+
+## Defaults Worth Knowing
+
+Important defaults live in `config.py`:
+
+| Block | Default |
+| --- | --- |
+| Region | `region_mode="turkey"` |
+| Users | `n_users=250`, `seed=1` |
+| User distribution | 10 hotspots, 15 percent uniform noise |
+| Traffic | lognormal demand, 5 Mbps base median |
+| QoS probabilities | eco/std/enterprise = `(0.6, 0.3, 0.1)` |
+| PHY | 20 GHz, 250 MHz, 40 dBW EIRP, `eta=0.7` |
+| Beam | `theta_3db_deg=1.0` |
+| Satellite source | `multisat.source="walker"` |
+| Walker constellation | 144 sats, 12 planes, 53 deg inclination, 600 km altitude |
+| Elevation mask | 25 deg |
+| Association load | `demand` |
+| Payload | enabled, `J_lanes=8`, `W_slots=8`, `Ks_max=256` |
+| FastBP baselines | disabled unless `run.enable_fastbp_baselines=True` |
+
+TLE mode is also supported:
+
+```python
+from dataclasses import replace
+from config import ScenarioConfig
+
+base = ScenarioConfig()
+cfg = replace(
+    base,
+    multisat=replace(
+        base.multisat,
+        source="tle",
+        tle_path="starlink.tle",
+    ),
+)
+```
 
 ## Installation
 
-### Prerequisites
+There is currently no `requirements.txt` or `pyproject.toml`. Install the
+runtime dependencies manually in your environment.
 
-- **Python 3.9+** (tested with 3.12)
-- **NumPy** (core operations)
-- **Matplotlib** (visualization)
-- **Skyfield** (TLE parsing and satellite ephemeris)
-- **SciPy** (optional: spatial accelerators for baselines)
-- **scikit-learn** (optional: K-Means baseline acceleration)
-- **Pandas** (optional: CSV loading for plots)
-
-### Setup
+Core heuristic runs:
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd qos_aware_user_clustering
-
-# Install dependencies
-pip install numpy matplotlib skyfield scipy scikit-learn pandas
-
-# Verify TLE file exists (or download your own)
-# Example: starlink.tle (not included, download from celestrak.org)
+python -m pip install numpy matplotlib
 ```
 
----
+Recommended optional packages:
+
+```bash
+python -m pip install scipy scikit-learn pandas skyfield
+```
+
+- `scipy` and `scikit-learn` accelerate the Fast Beam Placement baselines.
+  The code has fallbacks for some baseline paths if they are absent.
+- `pandas` is used by `run_sensitivity.py`.
+- `skyfield` is required when `multisat.source="tle"`.
+- `gurobipy` plus a working Gurobi license is required for `src/milp/*`,
+  `run_milp_smoke.py`, and `run_milp_compare.py`.
+
+The code uses modern Python type syntax, so use Python 3.10 or newer.
 
 ## Quick Start
 
-### 1. Single Scenario Run
+Run one heuristic scenario from Python:
 
 ```python
+from dataclasses import replace
 from config import ScenarioConfig
 from src.pipeline import run_scenario
 
-# Default configuration: Turkey region, 250 users, seed=1
-cfg = ScenarioConfig()
+base = ScenarioConfig()
+cfg = replace(
+    base,
+    run=replace(
+        base.run,
+        n_users=250,
+        seed=1,
+        verbose=False,
+        enable_plots=False,
+        enable_fastbp_baselines=False,
+    ),
+)
+
 result = run_scenario(cfg)
 
-print(f"Total beams: {result['main_ref_lb']['K']}")
-print(f"U_max: {result['main_ref_lb']['U_max']:.3f}")
-print(f"Enterprise edge exposure: {result['main_ref_lb']['ent_edge_pct']:.1f}%")
+print(result["payload_feasible"])
+print(result["payload_best_m"])
+print(result["main_ref_lb"]["K"])
+print(result["main_ref_lb"]["U_max"])
+print(result["main_ref_lb"]["ent_edge_pct"])
 ```
 
-### 2. Parallel Sweep (Phase B: Scaling)
-
-```python
-from main import main
-main()  # Runs Phase A (robustness) + Phase B (scaling) + generates plots
-```
-
-This will:
-- Generate users with hotspots across 10 seeds (Phase A: 2500 users)
-- Scale from 1k to 10k users across 5 seeds (Phase B)
-- Output CSVs: `sweep_phaseA.csv`, `sweep_phaseB.csv`
-- Generate plots in `plots/phaseA/` and `plots/phaseB/`
-
----
-
-## Core Modules
-
-### `config.py` - Configuration System
-
-Hierarchical frozen dataclasses for reproducible experiments:
-
-```python
-@dataclass(frozen=True)
-class ScenarioConfig:
-    region_mode: Literal["debug", "turkey"] = "turkey"
-    run: RunConfig = RunConfig()
-    phy: PhyConfig = PhyConfig()
-    beam: BeamConfig = BeamConfig()
-    ent: EnterpriseConfig = EnterpriseConfig()
-    traffic: TrafficConfig = TrafficConfig()
-    qos_refine: QoSRefineConfig = QoSRefineConfig()
-    lb_refine: LoadBalanceRefineConfig = LoadBalanceRefineConfig()
-    usergen: HotspotGenConfig = HotspotGenConfig()
-    multisat: MultiSatConfig = MultiSatConfig()
-```
-
-**Key Config Blocks:**
-- **PhyConfig**: Satellite altitude, carrier frequency, bandwidth, EIRP, spectral efficiency
-- **BeamConfig**: Discrete footprint radius modes (km)
-- **TrafficConfig**: Demand distribution (lognormal median + sigma), QoS probabilities
-- **EnterpriseConfig**: `rho_safe` threshold (enterprise users must stay z ≤ 0.7 within beam)
-- **QoSRefineConfig**: Enterprise refinement rounds, candidate count, move limits
-- **LoadBalanceRefineConfig**: LB refinement objective (max/range/var), overlap margin, receiver utilization cap
-
-### `pipeline.py` - Main Orchestration
-
-**Workflow:**
-1. **User generation** (`usergen.py`): Hotspots + noise in configured bbox
-2. **Satellite selection** (`satellites.py`): TLE → Top-N by elevation
-3. **User-to-satellite association** (`satellites.py`): Balanced load distribution
-4. **Per-satellite clustering**:
-   - **Split-to-feasible**: Recursive bisection until all clusters satisfy geometry + capacity
-   - **QoS refinement**: Move enterprise users away from beam edges (angle-based)
-   - **Load-balance refinement**: Minimize U_max across overlapping beams (frozen geometry)
-5. **Baseline runs**: Weighted K-Means, BK-Means, TGBP (with repair)
-6. **Global aggregation**: Summarize KPIs across all satellites
-7. **Plotting**: Visualize busiest satellite result
-
-### `evaluator.py` - Feasibility Checking
-
-**Cluster evaluation returns:**
-- `feasible`: Boolean (geometry + capacity constraints)
-- `reason`: "geom" (users exceed largest footprint mode), "cap" (U > 1), or None
-- `R_m`: Selected footprint radius (meters)
-- `req_m`: Required radius to cover all users (meters)
-- `U`: Utilization = Σ(qos_w × demand / rate)
-- `risk`: Σ(max(0, z_ent - rho_safe)²) for enterprise users
-- `rate_mbps`: Per-user Shannon rates (array)
-- `z`: Normalized radial distances from beam center (array)
-
-**Physics:**
-```python
-# Free-space path loss (dB)
-FSPL = 20 log₁₀(4πdf/c)
-
-# Gaussian antenna gain (dB)
-G = -3 (θ / θ_3dB)² log(2)
-
-# SNR (linear)
-SNR = 10^((EIRP + G - FSPL - L_misc - N_total) / 10)
-
-# Shannon rate (Mbps)
-R = η × B × log₂(1 + SNR) / 10⁶
-```
-
-### `refine_qos_angle.py` - Enterprise Edge Protection
-
-**Algorithm:**
-- Identify "at-risk" enterprise users: z > rho_safe in their current cluster
-- Candidate target clusters: smallest 3D off-axis angle (max dot product of boresight vectors)
-- Move user if both clusters remain feasible and:
-  - Number of exposed enterprise users decreases, OR
-  - Exposure unchanged but total risk decreases
-
-**Implementation details:**
-- Uses `u_sat2user` (precomputed unit vectors) for fast angle computation
-- Recomputes cluster boresights after each move within a round
-- Conservative: never moves from clusters with ≤2 users
-
-### `refine_load_balance.py` - Load Balancing
-
-**Key innovation: Frozen beam geometry**
-- Beam centers and radii are **fixed** after split-to-feasible
-- Only cluster membership changes
-- Incremental feasibility checks:
-  - **Geometry**: User must be inside receiver's frozen footprint (+ margin)
-  - **Capacity**: U_to_new ≤ 1.0 (and optionally ≤ receiver_u_max)
-- Enterprise guards: Exposure and risk must not increase (+ slack)
-
-**Objective functions:**
-- `max`: Minimize max(U) across all beams (default)
-- `range`: Minimize max(U) - min(U)
-- `var`: Minimize variance of U
-
-**Adjacency:** Grid-hash spatial index for fast overlap queries (beams overlap if dist(centers) ≤ R1 + R2 + margin)
-
-### `baselines/` - Comparison Algorithms
-
-#### Weighted K-Means++ (`weighted_kmeans.py`)
-- **Initialization**: k-means++ with weights (demand or demand×QoS)
-- **Lloyd iterations**: Weighted centroid updates
-- **Fixed-K evaluation**: Uses k-means centers as beam centers (frozen)
-- **Repair**: Split infeasible clusters until all feasible
-
-#### BK-Means (`fast_beam_placement.py`)
-- **Binary search K**: Find smallest K where k-means yields all clusters as "cliques" (diameter ≤ 2×r_max)
-- **Multi-restart**: μ=10 random restarts per K to avoid local minima
-- **Fixed-K evaluation**: Uses k-means centers (frozen)
-- **Repair**: Split infeasible clusters
-
-#### TGBP - Two-Phase Graph-Based Placement (`fast_beam_placement.py`)
-- **Phase 1**: Greedy clique cover on threshold graph (edge if dist ≤ 2×r_max)
-  - Order users by descending degree
-  - For each uncovered user: form maximal clique by adding compatible neighbors
-- **Phase 2**: Balance clique sizes by moving users between adjacent cliques
-- **Repair**: Split infeasible clusters
-
----
-
-## Algorithm Pipeline
-
-### Step 1: User Generation
-```python
-users = generate_users(cfg)  # Returns List[User]
-users_raw = pack_users_raw(users)  # Vectorized container (N,) arrays
-```
-- Hotspots: Gaussian clusters with random centers and variances
-- Noise: Uniform background users (default 15%)
-- Demand: Lognormal (median=5 Mbps, sigma=0.6)
-- QoS: Multinomial (60% eco, 30% std, 10% ent)
-
-### Step 2: Satellite Selection
-```python
-t0_utc, active_sats = select_top_n_active_sats(
-    tle_path="starlink.tle",
-    n_active=10,
-    elev_mask_deg=25.0,
-    ref_lat_deg=39.0, ref_lon_deg=35.0
-)
-```
-- Loads TLE file using Skyfield
-- Computes satellite positions at t0 (ECEF)
-- Filters by elevation ≥ mask at reference site
-- Returns top-N by elevation (descending)
-
-### Step 3: User-to-Satellite Association
-```python
-assoc = associate_users_balanced(
-    user_ecef_m, user_demand_mbps, user_qos_w,
-    sat_ecef_m, elev_mask_deg=25.0,
-    load_mode="wq_demand",  # "count" | "demand" | "wq_demand"
-    slack=0.15, max_rounds=6
-)
-```
-- Initial assignment: Each user → highest-elevation visible satellite
-- Rebalancing: Move "cheap-to-move" users from overloaded satellites
-- Soft cap: (total_load / n_sats) × (1 + slack)
-- Load metrics:
-  - `count`: Number of users
-  - `demand`: Σ demand_mbps
-  - `wq_demand`: Σ (demand_mbps × qos_w) ← **default**
-
-### Step 4: Per-Satellite Clustering
-
-For each satellite:
-
-#### 4a. Split-to-Feasible
-```python
-clusters, evals = split_to_feasible(users_sat, cfg)
-```
-- Queue-based: Start with all users in one cluster
-- Pop cluster → evaluate → if infeasible, split and push children
-- Split method: Farthest-point bisection (fast, balanced)
-- Stop when all clusters feasible
-
-#### 4b. QoS Refinement (Enterprise Edge Protection)
-```python
-clusters_ref, evals_ref, stats = refine_enterprise_by_angle(
-    users_sat, cfg, clusters, evals,
-    n_rounds=3, kcand=6, max_moves_per_round=2000
-)
-```
-- Reduces enterprise users at beam edges
-- Angle-based candidate selection (3D geometry)
-- Decreases `ent_edge_pct` (% of enterprise users with z > 0.7)
-
-#### 4c. Load-Balance Refinement
-```python
-clusters_lb, evals_lb, stats = refine_load_balance_by_overlap(
-    users_sat, cfg, clusters_ref, evals_ref
-)
-```
-- Minimizes U_max (or range/variance)
-- Frozen beam geometry (centers + radii fixed)
-- Only moves users between overlapping beams
-- Enterprise guards: Exposure/risk cannot increase
-
-### Step 5: Baseline Runs
-
-For each satellite, run all baselines with **same seed** for fair comparison:
-- Weighted K-Means (demand)
-- Weighted K-Means (demand×QoS)
-- BK-Means (optional: `enable_fastbp_baselines=True`)
-- TGBP (optional)
-
-Each baseline produces:
-- **Fixed-K results**: Using baseline-computed centers (frozen)
-- **Repaired results**: After split-until-feasible repair
-
-### Step 6: Global Aggregation
-```python
-global_summary = summarize_multisat(pieces, cfg)
-```
-Aggregates across all satellites:
-- `K`: Total beams
-- `U_mean`, `U_max`, `U_min`: Utilization statistics
-- `ent_total`, `ent_exposed`, `ent_edge_pct`: Enterprise edge metrics
-- `ent_z_mean`, `ent_z_p90`, `ent_z_max`: Radial distance percentiles
-- `risk_sum`: Total enterprise edge-risk penalty
-
----
-
-## Baseline Comparisons
-
-### Metrics Tracked
-
-| Metric | Description | Goal |
-|--------|-------------|------|
-| **K** | Number of beams | Minimize (fewer beams = lower cost) |
-| **U_max** | Maximum beam utilization | Minimize (balanced load) |
-| **U_mean** | Average beam utilization | Maximize efficiency |
-| **ent_edge_pct** | % Enterprise users at edge (z>0.7) | Minimize (QoS compliance) |
-| **risk_sum** | Σ(max(0, z_ent-0.7)²) | Minimize (edge penalty) |
-| **Runtime** | Total execution time (seconds) | Minimize (scalability) |
-
-### Expected Performance
-
-**Phase A (Robustness)**: 2500 users, 10 seeds, Turkey region with hotspots
-- **K**: 60-80 beams (typical)
-- **U_max**: 0.75-0.85 (main+QoS+LB)
-- **ent_edge_pct**: 2-5% (after refinements)
-- **Runtime**: ~10-30s per seed (main algorithm)
-
-**Phase B (Scaling)**: 1k-10k users, 5 seeds
-- **K scaling**: Roughly linear with user count
-- **U_max stability**: Refinements maintain <0.9 even at 10k users
-- **Runtime scaling**: Sub-linear due to efficient spatial indexing
-
----
-
-## Configuration
-
-### Example: Custom Region
-
-```python
-from config import ScenarioConfig, BBox, RunConfig
-from dataclasses import replace
-
-custom_bbox = BBox(lat_min=30.0, lat_max=35.0, lon_min=120.0, lon_max=125.0)
-
-cfg = replace(
-    ScenarioConfig(),
-    region_mode="custom",  # Add custom mode to config.py
-    run=replace(RunConfig(), n_users=5000, seed=42, verbose=True)
-)
-```
-
-### Example: High-Throughput Scenario
-
-```python
-from config import ScenarioConfig, PhyConfig, BeamConfig
-from dataclasses import replace
-
-high_throughput_cfg = replace(
-    ScenarioConfig(),
-    phy=replace(
-        PhyConfig(),
-        bandwidth_hz=500e6,  # 500 MHz (2× default)
-        eirp_dbw=45.0,        # 5 dB more power
-    ),
-    beam=replace(
-        BeamConfig(),
-        radius_modes_km=(3.0, 7.0, 12.0, 18.0)  # Smaller beams for higher gain
-    )
-)
-```
-
-### Example: Disable Load-Balance Refinement
-
-```python
-from config import ScenarioConfig, LoadBalanceRefineConfig
-from dataclasses import replace
-
-cfg = replace(
-    ScenarioConfig(),
-    lb_refine=replace(LoadBalanceRefineConfig(), enabled=False)
-)
-```
-
----
-
-## Output & Visualization
-
-### CSV Output
-
-`sweep_phaseA.csv` and `sweep_phaseB.csv` contain flattened records with columns:
-
-**Config fields:**
-- `seed`, `region_mode`, `n_users`, `use_hotspots`, `n_hotspots`, ...
-
-**Algorithm summaries (per algorithm):**
-- `main_K`, `main_U_max`, `main_ent_edge_pct`, ...
-- `main_ref_K`, `main_ref_U_max`, ...
-- `main_ref_lb_K`, `main_ref_lb_U_max`, ...
-
-**Baseline summaries:**
-- `wk_demand_rep_K`, `wk_qos_rep_K`, `bk_rep_K`, `tgbp_rep_K`, ...
-
-**Timing:**
-- `time_split_s`, `time_ent_ref_s`, `time_lb_ref_s`
-- `time_baseline_without_qos_s`, `time_baseline_with_qos_s`, ...
-
-**Multi-sat metadata:**
-- `ms_tle_path`, `ms_time_utc`, `ms_n_active`, `ms_n_unserved`, `ms_assoc_moves`
-
-### Plots
-
-**Phase A (Robustness):** `plots/phaseA/`
-- `<metric>_vs_seed.png`: Scatter + mean line for each metric
-
-**Phase B (Scaling):** `plots/phaseB/`
-- `K_vs_nusers.png`: Beam count scaling
-- `Umax_vs_nusers.png`: Max utilization vs users
-- `ent_edge_pct_vs_nusers.png`: Enterprise edge exposure
-- `runtime_methods_vs_nusers.png`: Total runtime comparison (main vs baselines)
-
-**Example plot generation:**
-```python
-from src.sweep_plots import plot_phaseA, plot_phaseB
-
-plot_phaseA("sweep_phaseA.csv", out_dir="plots/phaseA", show=False)
-plot_phaseB("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
-```
-
-**Interactive visualization (single scenario):**
-```python
-from src.plot import plot_clusters_overlay
-
-plot_clusters_overlay(
-    users_xy_m=users.xy_m,
-    qos_w=users.qos_w,
-    clusters=clusters,
-    evals=evals,
-    title="Main Algorithm (K=80)",
-    draw_circles=True,
-    draw_centers=True,
-    max_circles=300
-)
-```
-
----
-
-## Performance Optimization
-
-### Parallel Execution
-
-```python
-from main import run_parallel
-
-configs = [...]  # List of ScenarioConfig instances
-rows = run_parallel(configs, max_workers=None)  # Uses CPU count - 1
-```
-
-**Progress tracking:**
-```
-[  45/100]  45.00% | elapsed=2m 34s | eta=3m 12s
-```
-
-### Memory Optimization
-
-- **Users container**: Separate `UsersRaw` (satellite-agnostic) and `Users` (per-satellite cached geometry)
-- **Frozen dataclasses**: Immutable configs prevent accidental mutations
-- **NumPy views**: Avoid unnecessary array copies
-
-### Algorithmic Efficiency
-
-- **Grid-based adjacency** (`refine_load_balance.py`): O(K) overlap queries instead of O(K²)
-- **Incremental feasibility** (`refine_load_balance.py`): No re-evaluation of unaffected clusters
-- **Top-K selection** (`refine_qos_angle.py`): `argpartition` instead of full sort
-- **Early termination**: Refinement rounds stop when no moves accepted
-
-### Profiling
-
-```python
-from src.profiling import Profiler
-
-prof = Profiler()
-prof.tic("operation")
-# ... code ...
-prof.toc("operation")
-
-print(f"Time: {prof.t['operation']:.3f}s")
-print(f"Calls: {prof.c.get('operation_count', 0)}")
-```
-
----
-
-## Research Applications
-
-### 1. QoS Differentiation Studies
-- Compare algorithms with/without QoS refinement
-- Vary QoS probabilities and weights
-- Analyze trade-offs: beam count vs. enterprise edge protection
-
-### 2. Constellation Design
-- Sweep satellite altitude (600-1200 km)
-- Vary active satellite count (5-50)
-- Study elevation mask impact on coverage
-
-### 3. Beam Technology Assessment
-- Compare discrete footprint modes vs. continuous optimization
-- Analyze trade-offs: larger beams (fewer, higher capacity) vs. smaller beams (more, lower U)
-
-### 4. Load-Balancing Strategies
-- Compare objectives: max, range, variance
-- Analyze inter-beam handoff frequency
-- Study convergence properties (rounds, moves)
-
-### 5. Demand Modeling
-- Vary demand distributions (lognormal parameters)
-- Hotspot vs. uniform user distributions
-- Time-of-day traffic patterns (not yet implemented: would need temporal snapshots)
-
-### 6. Baseline Benchmarking
-- Reproduce results from Fast Beam Placement paper (BK-Means, TGBP)
-- Compare weighted vs. unweighted clustering
-- Analyze repair cost (K_before vs. K_after)
-
----
-
-## Advanced Usage
-
-### Custom User Generation
-
-```python
-from src.usergen import generate_users
-from src.models import User
-import numpy as np
-
-def custom_user_generator(cfg: ScenarioConfig) -> list[User]:
-    # Your custom logic here
-    # Example: Grid placement
-    N = cfg.run.n_users
-    grid_size = int(np.ceil(np.sqrt(N)))
-    xy = np.stack(np.meshgrid(
-        np.linspace(0, 100_000, grid_size),
-        np.linspace(0, 100_000, grid_size)
-    ), axis=-1).reshape(-1, 2)[:N]
-
-    # ... convert to lat/lon, assign demands, QoS, etc.
-    return users
-```
-
-### Custom Objective Function
-
-Add a new objective to `refine_load_balance.py`:
-
-```python
-elif objective == "p95":
-    # Minimize 95th percentile utilization
-    obj_current = float(np.percentile(U, 95))
-    # ... incremental update logic ...
-```
-
-### Multi-Objective Optimization
-
-```python
-def pareto_dominates(a: dict, b: dict) -> bool:
-    """Return True if a dominates b (minimize U_max, ent_edge_pct, K)."""
-    return (a['U_max'] <= b['U_max'] and
-            a['ent_edge_pct'] <= b['ent_edge_pct'] and
-            a['K'] <= b['K'] and
-            (a['U_max'] < b['U_max'] or
-             a['ent_edge_pct'] < b['ent_edge_pct'] or
-             a['K'] < b['K']))
-
-def find_pareto_front(results: list[dict]) -> list[dict]:
-    front = []
-    for candidate in results:
-        dominated = False
-        for other in results:
-            if pareto_dominates(other, candidate):
-                dominated = True
-                break
-        if not dominated:
-            front.append(candidate)
-    return front
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**1. `RuntimeError: No active satellites found above elev mask`**
-- **Cause**: TLE file path incorrect, or elev_mask_deg too high
-- **Fix**: Check `cfg.multisat.tle_path`, reduce `elev_mask_deg` (try 15°)
-
-**2. `RuntimeError: Too many clusters. Check demands/PHY parameters.`**
-- **Cause**: Scenario is infeasible (demands too high, bandwidth too low)
-- **Fix**: Increase `cfg.phy.bandwidth_hz`, decrease `cfg.traffic.demand_mbps_median`, or add larger footprint modes
-
-**3. `ValueError: Mismatch: len(z)={...} but len(cluster)={...}`**
-- **Cause**: Cluster/eval alignment corruption (should never happen with frozen dataclasses)
-- **Fix**: Report as bug with config + seed
-
-**4. Load-balance refinement very slow**
-- **Cause**: Too many overlapping beams, high `max_moves_per_round`
-- **Fix**: Reduce `cfg.lb_refine.max_moves_per_round` (try 1000), increase `intersect_margin_m` (try 1000.0)
-
-**5. Baselines (BK-Means, TGBP) disabled**
-- **Cause**: `enable_fastbp_baselines=False` in RunConfig
-- **Fix**: Set `enable_fastbp_baselines=True` in main.py
-
----
-
-## Testing
-
-### Unit Tests (Example: src/coords.py)
-
-```python
-import numpy as np
-from src.coords import llh_to_ecef, ll_to_local_xy_m
-
-def test_ecef_roundtrip():
-    lat, lon, h = 39.9334, 32.8597, 0.0  # Ankara
-    ecef = llh_to_ecef(np.array([lat]), np.array([lon]), h)
-    assert ecef.shape == (1, 3)
-    # Known value from online calculators (~±1 m)
-    expected = np.array([[4156894.0, 2767896.0, 4054878.0]])
-    np.testing.assert_allclose(ecef, expected, atol=2.0)
-
-def test_local_xy_zero():
-    lat0, lon0 = 40.0, 33.0
-    xy = ll_to_local_xy_m(np.array([lat0]), np.array([lon0]), lat0, lon0)
-    np.testing.assert_allclose(xy, [[0.0, 0.0]], atol=1e-6)
-```
-
-### Integration Test (Example: Full pipeline)
-
-```python
-def test_pipeline_turkey_default():
-    cfg = ScenarioConfig()
-    result = run_scenario(cfg)
-
-    assert result['seed'] == 1
-    assert result['n_users'] == 250
-    assert result['main_ref_lb']['K'] > 0
-    assert 0.0 <= result['main_ref_lb']['U_max'] <= 1.0
-    assert result['main_ref_lb']['feasible_rate'] == 1.0
-```
-
----
-
-## Performance Benchmarks
-
-**Hardware:** 12-core Intel i7, 32 GB RAM
-
-| Scenario | n_users | n_sats | K (beams) | Runtime (main) | Runtime (baselines) |
-|----------|---------|--------|-----------|----------------|---------------------|
-| Turkey, 1 seed | 250 | 10 | 15 | 0.8s | 1.2s |
-| Turkey, 1 seed | 2500 | 10 | 80 | 12s | 35s |
-| Turkey, 1 seed | 5000 | 10 | 150 | 30s | 85s |
-| Turkey, 1 seed | 10000 | 10 | 280 | 85s | 210s |
-
-**Parallel sweep (Phase B: 4 sizes × 5 seeds = 20 runs):** ~25 minutes (10 workers)
-
----
-
-## Contributing
-
-Contributions are welcome! Areas for improvement:
-
-1. **Temporal dynamics**: Multi-snapshot scenarios with beam handoffs
-2. **Inter-satellite links**: Extend to mesh networks with ISL constraints
-3. **Advanced PHY**: Implement DVB-S2X MODCOD adaptation, rain fading
-4. **GPU acceleration**: Port bottlenecks (evaluate_cluster, association) to CUDA
-5. **ML-based initialization**: Replace split-to-feasible with learned clustering
-6. **Web interface**: Real-time visualization with Plotly/Dash
-
-### Development Setup
+Run the current scaling sweep:
 
 ```bash
-# Install dev dependencies
-pip install pytest black flake8 mypy
-
-# Run formatter
-black src/ main.py config.py
-
-# Run linter
-flake8 src/ main.py config.py --max-line-length=120
-
-# Run type checker
-mypy src/ main.py config.py --ignore-missing-imports
-
-# Run tests
-pytest tests/
+python main.py
 ```
 
----
+The current `main.py` is configured for Phase B with:
 
-## Citation
-
-If you use this framework in your research, please cite:
-
-```bibtex
-@software{qos_aware_clustering_2024,
-  title = {QoS-Aware User Clustering for LEO Satellite Networks},
-  author = {[Your Name/Organization]},
-  year = {2024},
-  url = {[Repository URL]},
-  note = {Python framework for multi-satellite beam placement with QoS differentiation}
-}
+```text
+n_users = [1000, 1500, 2000, 2500]
+seeds = [1, 2, 3, 4, 5]
+region = turkey
+enable_fastbp_baselines = True
 ```
 
-**Related papers:**
-- Fast Beam Placement algorithms (BK-Means, TGBP): [Add reference]
-- Weighted K-Means for satellite networks: [Add reference]
+It writes `sweep_phaseB.csv` and regenerates plots/tables under `plots/phaseB/`.
+It also calls the Phase B plotter once at startup, so the checked-in
+`sweep_phaseB.csv` should be present when running the script as written. Edit
+`main.py` directly if you want a different sweep.
 
----
+Regenerate Phase B plots from an existing CSV:
 
-## License
+```bash
+python -m src.sweep_plots --csv sweep_phaseB.csv --out plots/phaseB
+```
 
-[Specify your license: MIT, Apache 2.0, GPL, etc.]
+## Sensitivity Studies
 
-**Dependencies:**
-- NumPy: BSD-3-Clause
-- Matplotlib: PSF-based
-- Skyfield: MIT
-- SciPy: BSD-3-Clause
-- scikit-learn: BSD-3-Clause
+`run_sensitivity.py` is an IDE-friendly script with an editable `SETTINGS`
+dictionary at the top. It runs one-factor sweeps plus a
+`theta_3db_deg x Ks_max` interaction study.
 
----
+Run it with:
 
-## Contact
+```bash
+python run_sensitivity.py
+```
 
-For questions, bug reports, or collaboration inquiries:
-- **Issues:** [GitHub Issues Link]
-- **Email:** [Your Email]
-- **Discussions:** [GitHub Discussions Link]
+It writes:
 
----
+```text
+sensitivity_results/sensitivity_runs.csv
+sensitivity_results/sensitivity_summary.csv
+sensitivity_results/sensitivity_interaction_runs.csv
+sensitivity_results/sensitivity_interaction_summary.csv
+sensitivity_results/sensitivity_tables.txt
+sensitivity_results/*.png
+```
 
-## Acknowledgments
+Note that this script currently defaults to `constellation_source="tle"`, so it
+needs `skyfield` and a usable `starlink.tle` file unless you change the setting
+to `walker`.
 
-- Skyfield team for excellent TLE parsing and ephemeris computation
-- Fast Beam Placement paper authors for baseline algorithm specifications
-- [Any funding agencies, collaborators, or institutions]
+## MILP Tools
 
----
+The MILP code in `src/milp/` builds a grid-candidate mixed-integer model using
+the same user generation and satellite ranking as the heuristic pipeline.
 
-**Last Updated:** 2025-02-01
-**Version:** 1.0.0
-**Status:** Research prototype (active development)
+MILP preparation:
+
+- generate users
+- rank the candidate satellite pool
+- build grid centers over the realized user footprint
+- create feasible satellite/grid beam candidates
+- precompute `demand / rate` coefficients for user-to-candidate assignments
+
+MILP solve variables:
+
+- `x_b`: candidate beam activation
+- `z_s`: satellite activation
+- `y_u_b`: user assignment to an active candidate beam
+
+MILP constraints include exactly-one user assignment, beam load,
+satellite beam count, satellite time budget, and optional prefix-ordered
+satellite activation. Objectives are `beam_only` or `weighted_sat_beam`.
+
+Small smoke run:
+
+```bash
+python run_milp_smoke.py
+```
+
+Full comparison sweep:
+
+```bash
+python run_milp_compare.py
+```
+
+The comparison script is configured in `CompareSweepConfig` inside
+`run_milp_compare.py`. The current defaults are large and can take a long time:
+many user counts, five seeds, up to 150 candidate satellites, Gurobi time limits,
+and a grid-spacing sensitivity study.
+
+Generated MILP outputs include:
+
+```text
+milp_compare.csv
+milp_compare_aggregate.csv
+milp_grid_sensitivity.csv
+milp_grid_sensitivity_aggregate.csv
+plots/milp/
+plots/milp/grid_sensitivity/
+```
+
+## Baselines And Comparisons
+
+The heuristic run records include:
+
+- `main`: split-to-feasible only
+- `main_ref`: split plus enterprise edge refinement
+- `main_ref_lb`: split plus enterprise refinement plus load-balance refinement
+- `sys_pure_max_elev`: fixed-prefix pure max-elevation association comparison
+- `sys_balanced_max_elev`: fixed-prefix balanced max-elevation comparison
+- `sys_max_service_time`: fixed-prefix service-time proxy comparison
+- `ab_A0_pure_split`: pure max elevation plus split
+- `ab_A1_bal_split`: balanced max elevation plus split
+- `ab_A2_bal_split_qos`: balanced max elevation plus split plus QoS refinement
+- `ab_A3_bal_split_qos_lb`: balanced max elevation plus split plus QoS plus load balance
+- `wk_demand_rep`: weighted k-means baseline using demand weights and repair
+- `wk_qos_rep`: weighted k-means baseline using demand times QoS weights and repair
+- `bk_rep`: BK-Means baseline, when FastBP baselines are enabled
+- `tgbp_rep`: TGBP baseline, when FastBP baselines are enabled
+
+Common summary metrics:
+
+- `K`: total beams
+- `feasible_rate`: cluster feasibility rate
+- `U_mean`, `U_max`, `U_min`: beam utilization summaries
+- `risk_sum`: enterprise edge-risk penalty
+- `ent_edge_pct`: percent of enterprise users with `z > rho_safe`
+- `ent_z_mean`, `ent_z_p90`, `ent_z_max`: enterprise radial position summaries
+- `radius_*_km`: beam radius summaries
+- `sat_mean_radius_*_km`: per-satellite mean beam radius summaries
+- `payload_*`: payload feasibility and overflow diagnostics
+- `time_*`: runtime components
+
+## Generated Files
+
+This repository contains generated CSVs, plots, and sensitivity outputs. The
+runner scripts may overwrite them. Before committing results, check the diff and
+decide whether the generated artifacts are intended to be updated.
+
+Useful outputs:
+
+```text
+sweep_phaseA.csv
+sweep_phaseB.csv
+plots/phaseB/phaseB_tables.txt
+milp_compare.csv
+milp_compare_aggregate.csv
+plots/milp/milp_compare_tables.txt
+sensitivity_results/sensitivity_tables.txt
+```
+
+## Current Limitations
+
+- There is no packaged CLI; the scripts are edited and run directly.
+- There is no dependency lockfile in this checkout.
+- There is no `tests/` directory in this checkout.
+- `run_scenario()` performs several comparisons per call, so even a single
+  scenario can be more expensive than a minimal clustering-only run.
+- Gurobi is mandatory for MILP code paths.
+- No `LICENSE` file is present in this checkout.

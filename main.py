@@ -138,9 +138,9 @@ def main():
 
     rows_b = run_parallel(configs_b, max_workers=None)
     rows_b.sort(key=lambda r: (r["n_users"], r["seed"]))
-    write_csv("sweep_phaseB.csv", rows_b)
+    write_csv("sweep_phaseB_old.csv", rows_b)
     print(f"Wrote {len(rows_b)} runs to sweep_phaseB.csv")
-    make_phaseB_plots("sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
+    make_phaseB_plots("sweep_phaseB_old.csv", out_dir="plots/phaseB", show=False)
 
 if __name__ == "__main__":
     mp.freeze_support()

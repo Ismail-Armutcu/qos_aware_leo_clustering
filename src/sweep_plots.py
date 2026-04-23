@@ -1,4 +1,3 @@
-
 # src/sweep_plots.py
 from __future__ import annotations
 
@@ -315,6 +314,24 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str) -> None:
     }
     lines.append(_format_table_block("K_vs_nusers", _series_table_rows(dfB, "K_vs_nusers", k_series)))
 
+    best_m_series = {
+        "main+qos+lb": "main_ref_lb_best_m",
+        "bk rep": "bk_rep_best_m",
+        "tgbp rep": "tgbp_rep_best_m",
+        "wk demand rep": "wk_demand_rep_best_m",
+        "wk qos rep": "wk_qos_rep_best_m",
+    }
+    lines.append(_format_table_block("best_m_vs_nusers", _series_table_rows(dfB, "best_m_vs_nusers", best_m_series)))
+
+    umean_series = {
+        "main+qos+lb": "main_ref_lb_U_mean",
+        "bk rep": "bk_rep_U_mean",
+        "tgbp rep": "tgbp_rep_U_mean",
+        "wk demand rep": "wk_demand_rep_U_mean",
+        "wk qos rep": "wk_qos_rep_U_mean",
+    }
+    lines.append(_format_table_block("Umean_vs_nusers", _series_table_rows(dfB, "Umean_vs_nusers", umean_series)))
+
     # Rigid fixed-prefix ablation tables
     ab_feas = {
         "A0 pure+split": "ab_A0_payload_feasible",
@@ -433,7 +450,23 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 2) External comparison: Umax
+    # 2) Main external comparison: minimum feasible prefix / used satellites
+    plot_lines_vs_nusers(
+        df,
+        {
+            "main+qos+lb": "main_ref_lb_best_m",
+            "bk rep": "bk_rep_best_m",
+            "tgbp rep": "tgbp_rep_best_m",
+            "wk demand rep": "wk_demand_rep_best_m",
+            "wk qos rep": "wk_qos_rep_best_m",
+        },
+        title="Minimum feasible prefix vs user count",
+        ylabel="used satellites / best_m",
+        out_path=os.path.join(out_dir, "best_m_vs_nusers.png"),
+        show=show,
+    )
+
+    # 3) External comparison: Umax
     plot_lines_vs_nusers(
         df,
         {
@@ -449,7 +482,23 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 3) External comparison: enterprise edge exposure
+    # 4) External comparison: Umean
+    plot_lines_vs_nusers(
+        df,
+        {
+            "main+qos+lb": "main_ref_lb_U_mean",
+            "bk rep": "bk_rep_U_mean",
+            "tgbp rep": "tgbp_rep_U_mean",
+            "wk demand rep": "wk_demand_rep_U_mean",
+            "wk qos rep": "wk_qos_rep_U_mean",
+        },
+        title="Mean utilization vs user count",
+        ylabel="U_mean",
+        out_path=os.path.join(out_dir, "Umean_vs_nusers.png"),
+        show=show,
+    )
+
+    # 5) External comparison: enterprise edge exposure
     plot_lines_vs_nusers(
         df,
         {
@@ -463,7 +512,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 4) Rigid fixed-prefix ablation: feasible rate
+    # 6) Rigid fixed-prefix ablation: feasible rate
     plot_lines_vs_nusers(
         df,
         {
@@ -478,7 +527,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 5) Rigid fixed-prefix ablation: beam count
+    # 7) Rigid fixed-prefix ablation: beam count
     plot_lines_vs_nusers(
         df,
         {
@@ -493,7 +542,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show
     )
 
-    # 6) Rigid fixed-prefix ablation: Umax
+    # 8) Rigid fixed-prefix ablation: Umax
     plot_lines_vs_nusers(
         df,
         {
@@ -508,7 +557,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 7) Rigid fixed-prefix ablation: runtime
+    # 9) Rigid fixed-prefix ablation: runtime
     plot_lines_vs_nusers(
         df,
         {
@@ -524,7 +573,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         y_log=True,
     )
 
-    # 8) System-level association comparison: K
+    # 10) System-level association comparison: K
     plot_lines_vs_nusers(
         df,
         {
@@ -538,7 +587,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 6) System-level association comparison: Umax
+    # 11) System-level association comparison: Umax
     plot_lines_vs_nusers(
         df,
         {
@@ -552,7 +601,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 7) System-level association comparison: feasible rate
+    # 12) System-level association comparison: feasible rate
     plot_lines_vs_nusers(
         df,
         {
@@ -566,7 +615,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 8) Payload violations
+    # 13) Payload violations
     plot_grouped_bars_vs_nusers(
         df,
         {
@@ -579,7 +628,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 8) Payload overflow
+    # 14) Payload overflow
     plot_lines_vs_nusers(
         df,
         {
@@ -592,7 +641,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 9) Beam radius summary
+    # 15) Beam radius summary
     plot_lines_vs_nusers(
         df,
         {
@@ -606,7 +655,7 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 10) Runtime
+    # 16) Runtime
     plot_lines_vs_nusers(
         df,
         {

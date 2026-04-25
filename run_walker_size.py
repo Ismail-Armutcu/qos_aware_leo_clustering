@@ -50,7 +50,7 @@ SETTINGS: dict[str, Any] = {
     "max_workers": max(1, (os.cpu_count() or 4) - 1),
 
     # Output
-    "out_dir": "walker_size_results",
+    "out_dir": "plots/walker_size",
 
     # Base scenario
     "region_mode": "turkey",

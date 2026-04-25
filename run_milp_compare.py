@@ -44,8 +44,8 @@ class SimpleProfiler:
 
 @dataclass(frozen=True)
 class CompareSweepConfig:
-    output_csv: str = "milp_compare.csv"
-    aggregate_csv: str = "milp_compare_aggregate.csv"
+    output_csv: str = "plots/milp/milp_compare.csv"
+    aggregate_csv: str = "plots/milp/milp_compare_aggregate.csv"
     tables_txt: str = "plots/milp/milp_compare_tables.txt"
     output_dir: str = "plots/milp"
 
@@ -54,8 +54,8 @@ class CompareSweepConfig:
     max_workers: int = max(1, (os.cpu_count() or 4) - 1)
 
     region_mode: str = "turkey"
-    n_users_list: tuple[int, ...] = (50, 75, 100, 125, 150, 175, 200, 500, 1000, 2000, 5000)
-    seeds: tuple[int, ...] = (1, 2, 3)
+    n_users_list: tuple[int, ...] = (50, 75, 100, 125, 150, 200, 300, 500, 1000)
+    seeds: tuple[int, ...] = (1, 2, 3, 4, 5)
 
     # Reduced MILP instances / fixed pool
     milp_n_candidate_sats: int = 150
@@ -71,10 +71,10 @@ class CompareSweepConfig:
 
     # Small MILP grid-spacing sensitivity (MILP-only)
     grid_sensitivity_enabled: bool = True
-    grid_sensitivity_n_users_list: tuple[int, ...] = (100, 150)
+    grid_sensitivity_n_users_list: tuple[int, ...] = (100, 200, 300)
     grid_sensitivity_grid_spacing_m_list: tuple[float, ...] = (10_000.0, 15_000.0, 20_000.0)
-    grid_sensitivity_csv: str = "milp_grid_sensitivity.csv"
-    grid_sensitivity_aggregate_csv: str = "milp_grid_sensitivity_aggregate.csv"
+    grid_sensitivity_csv: str = "plots/milp/milp_grid_sensitivity.csv"
+    grid_sensitivity_aggregate_csv: str = "plots/milp/milp_grid_sensitivity_aggregate.csv"
     grid_sensitivity_tables_txt: str = "plots/milp/milp_grid_sensitivity_tables.txt"
     grid_sensitivity_output_dir: str = "plots/milp/grid_sensitivity"
 

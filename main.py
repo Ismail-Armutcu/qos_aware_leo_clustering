@@ -114,8 +114,8 @@ def main():
     # -------------------------
     #n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
 
-    n_users_list = [1000, 1500, 2000, 2500]
-    seeds_b = list(range(1, 6))
+    n_users_list = [1000, 2000, 3000, 5000]
+    seeds_b = list(range(1, 11))
 
     configs_b = []
     for n in n_users_list:

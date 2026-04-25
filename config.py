@@ -27,10 +27,10 @@ DEBUG_BBOX  = BBox(39.5, 40.3, 32.3, 33.3)
 class PhyConfig:
     sat_altitude_m: float = 600_000.0
     carrier_freq_hz: float = 20e9
-    bandwidth_hz: float = 250e6
-    eirp_dbw: float = 40.0
-    eta: float = 0.7
-    loss_misc_db: float = 2.0
+    bandwidth_hz: float = 150e6
+    eirp_dbw: float = 38.0
+    eta: float = 0.6
+    loss_misc_db: float = 3.5
     noise_psd_dbw_hz: float = -228.6
 
 
@@ -51,8 +51,8 @@ class EnterpriseConfig:
 @dataclass(frozen=True)
 class TrafficConfig:
     # Baseline traffic model
-    demand_mbps_median: float = 5
-    demand_logn_sigma: float = 0.6
+    demand_mbps_median: float = 8.0
+    demand_logn_sigma: float = 0.8
 
     # QoS distribution (eco/std/ent)
     qos_probs: Tuple[float, float, float] = (0.6, 0.3, 0.1)
@@ -164,12 +164,12 @@ class PayloadConfig:
 
     # Beam-hopping / scheduling window model:
     #   per-sat time feasibility: sum_b U_{s,b} <= J_lanes * W_slots
-    J_lanes: float = 8.0
-    W_slots: int = 8
+    J_lanes: float = 4.0
+    W_slots: int = 6
 
     # Per-satellite beam count cap:
     #   per-sat beam feasibility: K_s <= Ks_max
-    Ks_max: int = 256
+    Ks_max: int = 96
 
     # Inner repair loop limits (cluster-level offloads)
     max_rounds: int = 8

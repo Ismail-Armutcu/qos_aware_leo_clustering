@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping, Sequence
 
@@ -534,6 +535,7 @@ def flatten_run_record(rec: dict[str, Any]) -> dict[str, Any]:
 def write_csv(path: str, rows: list[dict[str, Any]]):
     if not rows:
         return
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     fieldset = set()
     for r in rows:
         fieldset.update(r.keys())

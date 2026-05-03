@@ -153,7 +153,6 @@ def refine_load_balance_by_overlap(
     objective = str(cfg.lb_refine.objective).lower().strip()
 
     prefer_non_ent = bool(cfg.lb_refine.prefer_non_enterprise)
-    lock_ent_moves = bool(getattr(cfg.lb_refine, "lock_enterprise_moves", False))
     risk_slack = float(cfg.lb_refine.risk_slack)
     exposure_slack = int(cfg.lb_refine.exposure_slack)
     allow_receiver_close = bool(cfg.lb_refine.allow_receiver_close_to_full)
@@ -300,21 +299,12 @@ def refine_load_balance_by_overlap(
 
                     if prefer_non_ent:
                         non_ent_idx = np.where(users.qos_w[S_from] != 4)[0]
+                        ent_idx = np.where(users.qos_w[S_from] == 4)[0]
                         non_ent_sorted = non_ent_idx[np.argsort(-share_from[non_ent_idx])] if non_ent_idx.size else np.array([], dtype=int)
-
-                        if lock_ent_moves:
-                            # Option D: do not let load balancing undo enterprise-centered placement.
-                            order = non_ent_sorted
-                        else:
-                            ent_idx = np.where(users.qos_w[S_from] == 4)[0]
-                            ent_sorted = ent_idx[np.argsort(-share_from[ent_idx])] if ent_idx.size else np.array([], dtype=int)
-                            order = np.concatenate([non_ent_sorted, ent_sorted], axis=0)
+                        ent_sorted = ent_idx[np.argsort(-share_from[ent_idx])] if ent_idx.size else np.array([], dtype=int)
+                        order = np.concatenate([non_ent_sorted, ent_sorted], axis=0)
                     else:
-                        if lock_ent_moves:
-                            non_ent_idx = np.where(users.qos_w[S_from] != 4)[0]
-                            order = non_ent_idx[np.argsort(-share_from[non_ent_idx])] if non_ent_idx.size else np.array([], dtype=int)
-                        else:
-                            order = np.argsort(-share_from)
+                        order = np.argsort(-share_from)
 
                     order = order[: min(k_users, order.size)]
                     if order.size == 0:

@@ -1,54 +1,8 @@
 # src/evaluator.py
-from __future__ import annotations
-
 import numpy as np
 
 from src.coords import unit
 from src.phy import fspl_db, gain_db_gaussian, snr_lin, shannon_rate_mbps
-
-
-def compute_cluster_center(
-    users,
-    cluster_ids: np.ndarray,
-    cfg,
-    *,
-    center_mode_override: str | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Configurable beam-center calculation.
-
-    - "mean": original arithmetic/geometric center.
-    - "qos_weighted": proposed-method center pulled toward enterprise users.
-
-    Baselines force original behavior by using center_mode_override="mean".
-    """
-    S = np.asarray(cluster_ids, dtype=int)
-    xy = users.xy_m[S]
-    ecef = users.ecef_m[S]
-
-    if center_mode_override is None:
-        mode = str(getattr(cfg.ent, "center_mode", "mean")).lower().strip()
-    else:
-        mode = str(center_mode_override).lower().strip()
-
-    if mode in {"mean", "geometric", "original"}:
-        return xy.mean(axis=0), ecef.mean(axis=0)
-
-    if mode == "qos_weighted":
-        q = users.qos_w[S]
-        w = np.ones(S.size, dtype=float)
-        w[q == 1] = float(getattr(cfg.ent, "center_weight_eco", 1.0))
-        w[q == 2] = float(getattr(cfg.ent, "center_weight_standard", 1.5))
-        w[q == 4] = float(getattr(cfg.ent, "center_weight_enterprise", 6.0))
-
-        if not np.any(w > 0.0) or not np.all(np.isfinite(w)):
-            return xy.mean(axis=0), ecef.mean(axis=0)
-
-        c_xy = np.average(xy, axis=0, weights=w)
-        c_ecef = np.average(ecef, axis=0, weights=w)
-        return c_xy, c_ecef
-
-    raise ValueError(f"Unknown center mode: {mode!r}. Expected 'mean' or 'qos_weighted'.")
 
 
 def evaluate_cluster(
@@ -58,17 +12,26 @@ def evaluate_cluster(
     center_xy_override: np.ndarray | None = None,
     center_ecef_override: np.ndarray | None = None,
     R_m_override: float | None = None,
-    center_mode_override: str | None = None,
 ):
     """
     Evaluate one cluster under a fixed half-beamwidth-angle model.
 
+    IMPORTANT CONTRACT (for summarize_*):
+      - If returned dict has R_m != None, it MUST include 'z' with len(z)==len(cluster).
+
+    Beam model:
+      - Fixed angular half-power beamwidth: cfg.beam.theta_3db_deg
+      - Beam footprint radius is derived per cluster as:
+            R_m = d_center * tan(theta_3db)
+        where d_center is the satellite-to-beam-center slant range.
+
     Optional overrides:
       - center_xy_override   : force XY center (meters)
       - center_ecef_override : force ECEF center (meters)
-      - R_m_override         : force footprint radius (meters)
-      - center_mode_override : force center mode when no explicit center override is given.
-                               Baselines use "mean" to avoid QoS-center contamination.
+      - R_m_override         : force footprint radius (meters) for this evaluation only.
+                               Useful in local refinements that want to preserve the current
+                               footprint while testing reassignment moves. If provided,
+                               geometry is feasible iff req_m <= R_m_override.
     """
     S = np.asarray(cluster_ids, dtype=int)
     m = int(S.size)
@@ -77,30 +40,27 @@ def evaluate_cluster(
 
     xy = users.xy_m[S]  # (m,2)
 
-    default_c_xy, default_c_ecef = compute_cluster_center(
-        users,
-        S,
-        cfg,
-        center_mode_override=center_mode_override,
-    )
-
+    # --- center XY ---
     if center_xy_override is not None:
         c_xy = np.asarray(center_xy_override, dtype=float).reshape(2)
     else:
-        c_xy = default_c_xy
+        c_xy = xy.mean(axis=0)
 
     dist_m = np.linalg.norm(xy - c_xy[None, :], axis=1)
     req_m = float(dist_m.max())
 
+    # --- center ECEF ---
     if center_ecef_override is not None:
         c_ecef = np.asarray(center_ecef_override, dtype=float).reshape(3)
     else:
-        c_ecef = default_c_ecef
+        c_ecef = users.ecef_m[S].mean(axis=0)
 
+    # boresight sat->center
     v_c = c_ecef - users.sat_ecef_m
     d_center = float(np.linalg.norm(v_c)) + 1e-12
     u_c = unit(v_c)
 
+    # --- fixed-angle beam model / optional fixed-radius override ---
     if R_m_override is not None:
         R_m = float(R_m_override)
         theta_3db = float(np.arctan(R_m / d_center))
@@ -118,8 +78,10 @@ def evaluate_cluster(
             }
         R_m = float(d_center * np.tan(theta_3db))
 
+    # Always compute z whenever R_m is known (even if infeasible)
     z = dist_m / (R_m + 1e-9)
 
+    # geometry check
     if req_m > R_m + 1e-9:
         rho = float(cfg.ent.rho_safe)
         ent = (users.qos_w[S] == 4)
@@ -140,10 +102,12 @@ def evaluate_cluster(
             "theta_3db": theta_3db,
         }
 
-    u_i = users.u_sat2user[S]
+    # off-axis angles
+    u_i = users.u_sat2user[S]  # (m,3)
     cosang = np.clip(u_i @ u_c, -1.0, 1.0)
     theta = np.arccos(cosang)
 
+    # PHY
     fspl = fspl_db(users.range_m[S], cfg.phy.carrier_freq_hz)
     g_db = gain_db_gaussian(theta, theta_3db)
 
@@ -157,11 +121,13 @@ def evaluate_cluster(
     )
     rate_mbps = shannon_rate_mbps(snr, cfg.phy.bandwidth_hz, cfg.phy.eta)
 
+    # capacity (time-share) -- UNWEIGHTED demand
     d = users.demand_mbps[S]
     s_share = d / (rate_mbps + 1e-9)
     U = float(s_share.sum())
     cap_ok = (U <= cfg.payload.W_slots + 1e-9)
 
+    # enterprise edge-risk
     rho = float(cfg.ent.rho_safe)
     ent = (users.qos_w[S] == 4)
     risk = float(np.sum(np.maximum(0.0, z[ent] - rho) ** 2))
@@ -177,6 +143,7 @@ def evaluate_cluster(
         "risk": risk,
         "rate_mbps": rate_mbps,
         "z": z,
+        # extra cached stuff (ok to keep)
         "u_c": u_c,
         "d_center": d_center,
         "theta_3db": theta_3db,

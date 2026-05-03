@@ -19,7 +19,7 @@ from src.helper import summarize_multisat, print_summary, print_config
 from src.plot import plot_clusters_overlay, plot_payload_sat_stats
 from src.refine_qos_angle import refine_enterprise_by_angle
 from src.refine_load_balance import refine_load_balance_by_overlap
-from src.split import split_cluster
+from src.split import split_farthest
 from src.profiling import Profiler
 from src.usergen import generate_users, pack_users_raw, build_users_for_sat
 
@@ -107,15 +107,7 @@ def _nan_summary() -> dict[str, Any]:
 
 
 
-def split_to_feasible(
-   users,
-   cfg: ScenarioConfig,
-   prof: Profiler | None = None,
-   max_clusters: int = 5000,
-   *,
-   split_mode_override: str | None = None,
-   center_mode_override: str | None = None,
-):
+def split_to_feasible(users, cfg: ScenarioConfig, prof: Profiler | None = None, max_clusters: int = 5000):
    pending = deque([np.arange(users.n, dtype=int)])
    clusters_feas: list[np.ndarray] = []
    evals_feas: list[dict] = []
@@ -132,12 +124,7 @@ def split_to_feasible(
            continue
 
 
-       ev = evaluate_cluster(
-           users,
-           S,
-           cfg,
-           center_mode_override=center_mode_override,
-       )
+       ev = evaluate_cluster(users, S, cfg)
        if prof:
            prof.inc("eval_calls")
 
@@ -149,19 +136,13 @@ def split_to_feasible(
 
 
        seed = int(cfg.run.seed) + n_splits + 1
-       S1, S2 = split_cluster(
-           users,
-           S,
-           cfg,
-           seed=seed,
-           split_mode_override=split_mode_override,
-       )
+       S1, S2 = split_farthest(users.xy_m, S, seed=seed)
        S1 = np.asarray(S1, dtype=int)
        S2 = np.asarray(S2, dtype=int)
 
 
        if S1.size == 0 or S2.size == 0:
-           raise RuntimeError(f"split_cluster produced empty split: |S|={S.size} -> {S1.size},{S2.size}")
+           raise RuntimeError(f"split_farthest produced empty split: |S|={S.size} -> {S1.size},{S2.size}")
 
 
        pending.append(S1)
@@ -175,20 +156,6 @@ def split_to_feasible(
 
    return clusters_feas, evals_feas
 
-
-
-def _baseline_split_to_feasible_original(users, cfg: ScenarioConfig):
-   """
-   Baseline K_ref must remain geometric/original even when proposed-method
-   config enables enterprise_first split or qos_weighted center.
-   """
-   return split_to_feasible(
-       users,
-       cfg,
-       prof=None,
-       split_mode_override="farthest",
-       center_mode_override="mean",
-   )
 
 
 
@@ -291,7 +258,7 @@ def _local_build_main_ref_lb(users_sat, cfg: ScenarioConfig, prof: Profiler):
 def _local_build_wkmeans_repaired(use_qos_weight: bool):
    cat = "baseline_with_qos" if use_qos_weight else "baseline_without_qos"
    def _builder(users_sat, cfg: ScenarioConfig, prof: Profiler):
-       K_ref = len(_baseline_split_to_feasible_original(users_sat, cfg)[0])
+       K_ref = len(split_to_feasible(users_sat, cfg, prof=None)[0])
        prof.tic(cat)
        out = run_weighted_kmeans_baseline(users_sat, cfg, K_ref=K_ref, use_qos_weight=use_qos_weight)
        prof.toc(cat)
@@ -303,7 +270,7 @@ def _local_build_wkmeans_repaired(use_qos_weight: bool):
 
 
 def _local_build_bkmeans_repaired(users_sat, cfg: ScenarioConfig, prof: Profiler):
-   K_ref = len(_baseline_split_to_feasible_original(users_sat, cfg)[0])
+   K_ref = len(split_to_feasible(users_sat, cfg, prof=None)[0])
    prof.tic("baseline_bkmeans")
    out = run_bkmeans_baseline(users_sat, cfg, K_hint=K_ref)
    prof.toc("baseline_bkmeans")

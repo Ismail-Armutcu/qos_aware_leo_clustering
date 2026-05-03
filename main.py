@@ -114,8 +114,8 @@ def main():
     # -------------------------
     #n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
 
-    n_users_list = [1000, 2000, 3000, 5000]
-    seeds_b = list(range(1, 11))
+    n_users_list = [500]
+    seeds_b = list(range(1, 2))
 
     configs_b = []
     for n in n_users_list:
@@ -138,9 +138,9 @@ def main():
 
     rows_b = run_parallel(configs_b, max_workers=None)
     rows_b.sort(key=lambda r: (r["n_users"], r["seed"]))
-    write_csv("sweep_phaseB_old.csv", rows_b)
+    write_csv("plots/phaseB/sweep_phaseB.csv", rows_b)
     print(f"Wrote {len(rows_b)} runs to sweep_phaseB.csv")
-    make_phaseB_plots("sweep_phaseB_old.csv", out_dir="plots/phaseB", show=False)
+    make_phaseB_plots("plots/phaseB/sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
 
 if __name__ == "__main__":
     mp.freeze_support()

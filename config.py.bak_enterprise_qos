@@ -44,26 +44,8 @@ class BeamConfig:
 
 
 @dataclass(frozen=True)
-class SplitConfig:
-    # Proposed-method split mode.
-    # "farthest" keeps the original geometry-only split.
-    # "enterprise_first" starts bisection from enterprise anchors when possible.
-    mode: Literal["farthest", "enterprise_first"] = "enterprise_first"
-
-
-@dataclass(frozen=True)
 class EnterpriseConfig:
     rho_safe: float = 0.7
-
-    # Proposed-method center calculation.
-    # "mean" keeps the original geometric/arithmetic center.
-    # "qos_weighted" pulls the beam center toward enterprise users.
-    center_mode: Literal["mean", "qos_weighted"] = "qos_weighted"
-
-    # Used only when center_mode == "qos_weighted".
-    center_weight_eco: float = 1.0
-    center_weight_standard: float = 1.5
-    center_weight_enterprise: float = 6.0
 
 
 @dataclass(frozen=True)
@@ -101,11 +83,6 @@ class LoadBalanceRefineConfig:
     exposure_slack: int = 0
     allow_receiver_close_to_full: bool = False
     receiver_u_max: float = 0.90
-
-    # Proposed-method Option D behavior.
-    # If True, load-balance refinement only moves eco/standard users.
-    # Baselines do not call this refinement, so this does not affect baselines.
-    lock_enterprise_moves: bool = True
 
 
 @dataclass(frozen=True)
@@ -213,7 +190,6 @@ class ScenarioConfig:
     run: RunConfig = RunConfig()
     phy: PhyConfig = PhyConfig()
     beam: BeamConfig = BeamConfig()
-    split: SplitConfig = SplitConfig()
     ent: EnterpriseConfig = EnterpriseConfig()
     traffic: TrafficConfig = TrafficConfig()
 

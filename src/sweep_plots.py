@@ -324,13 +324,13 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str) -> None:
     lines.append(_format_table_block("best_m_vs_nusers", _series_table_rows(dfB, "best_m_vs_nusers", best_m_series)))
 
     umean_series = {
-        "main+qos+lb": "main_ref_lb_U_mean",
-        "bk rep": "bk_rep_U_mean",
-        "tgbp rep": "tgbp_rep_U_mean",
-        "wk demand rep": "wk_demand_rep_U_mean",
-        "wk qos rep": "wk_qos_rep_U_mean",
+        "main+qos+lb": "main_ref_lb_sat_util_mean",
+        "bk rep": "bk_rep_sat_util_mean",
+        "tgbp rep": "tgbp_rep_sat_util_mean",
+        "wk demand rep": "wk_demand_rep_sat_util_mean",
+        "wk qos rep": "wk_qos_rep_sat_util_mean",
     }
-    lines.append(_format_table_block("Umean_vs_nusers", _series_table_rows(dfB, "Umean_vs_nusers", umean_series)))
+    lines.append(_format_table_block("sat_util_mean_vs_nusers", _series_table_rows(dfB, "sat_util_mean_vs_nusers", umean_series)))
 
     # Rigid fixed-prefix ablation tables
     ab_feas = {
@@ -350,12 +350,12 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str) -> None:
     lines.append(_format_table_block("ablation_K_vs_nusers", _series_table_rows(dfB, "ablation_K_vs_nusers", ab_k)))
 
     ab_umax = {
-        "A0 pure+split": "ab_A0_pure_split_U_max",
-        "A1 bal+split": "ab_A1_bal_split_U_max",
-        "A2 bal+split+qos": "ab_A2_bal_split_qos_U_max",
-        "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_U_max",
+        "A0 pure+split": "ab_A0_pure_split_sat_util_max",
+        "A1 bal+split": "ab_A1_bal_split_sat_util_max",
+        "A2 bal+split+qos": "ab_A2_bal_split_qos_sat_util_max",
+        "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_sat_util_max",
     }
-    lines.append(_format_table_block("ablation_Umax_vs_nusers", _series_table_rows(dfB, "ablation_Umax_vs_nusers", ab_umax)))
+    lines.append(_format_table_block("ablation_sat_util_max_vs_nusers", _series_table_rows(dfB, "ablation_sat_util_max_vs_nusers", ab_umax)))
 
     ab_rt = {
         "A0 pure+split": "time_ab_A0_s",
@@ -382,11 +382,11 @@ def _write_phaseB_tables_txt(dfB, out_dir: str, *, csv_path: str) -> None:
     lines.append(_format_table_block("system_assoc_K_vs_nusers", _series_table_rows(dfB, "system_assoc_K_vs_nusers", sys_k)))
 
     sys_umax = {
-        "pure max elev": "sys_pure_max_elev_U_max",
-        "balanced max elev": "sys_balanced_max_elev_U_max",
-        "max service time": "sys_max_service_time_U_max",
+        "pure max elev": "sys_pure_max_elev_sat_util_max",
+        "balanced max elev": "sys_balanced_max_elev_sat_util_max",
+        "max service time": "sys_max_service_time_sat_util_max",
     }
-    lines.append(_format_table_block("system_assoc_Umax_vs_nusers", _series_table_rows(dfB, "system_assoc_Umax_vs_nusers", sys_umax)))
+    lines.append(_format_table_block("system_assoc_sat_util_max_vs_nusers", _series_table_rows(dfB, "system_assoc_sat_util_max_vs_nusers", sys_umax)))
 
     sys_feas = {
         "pure max elev": "sys_pure_max_elev_payload_feasible",
@@ -466,35 +466,35 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 3) External comparison: Umax
+    # 3) External comparison: satellite utilization max
     plot_lines_vs_nusers(
         df,
         {
-            "main+qos+lb": "main_ref_lb_U_max",
-            "bk rep": "bk_rep_U_max",
-            "tgbp rep": "tgbp_rep_U_max",
-            "wk demand rep": "wk_demand_rep_U_max",
-            "wk qos rep": "wk_qos_rep_U_max",
+            "main+qos+lb": "main_ref_lb_sat_util_max",
+            "bk rep": "bk_rep_sat_util_max",
+            "tgbp rep": "tgbp_rep_sat_util_max",
+            "wk demand rep": "wk_demand_rep_sat_util_max",
+            "wk qos rep": "wk_qos_rep_sat_util_max",
         },
-        title="Peak utilization vs user count",
-        ylabel="U_max",
-        out_path=os.path.join(out_dir, "Umax_vs_nusers.png"),
+        title="Satellite utilization (max) vs user count",
+        ylabel="sat utilization",
+        out_path=os.path.join(out_dir, "sat_util_max_vs_nusers.png"),
         show=show,
     )
 
-    # 4) External comparison: Umean
+    # 4) External comparison: satellite utilization mean
     plot_lines_vs_nusers(
         df,
         {
-            "main+qos+lb": "main_ref_lb_U_mean",
-            "bk rep": "bk_rep_U_mean",
-            "tgbp rep": "tgbp_rep_U_mean",
-            "wk demand rep": "wk_demand_rep_U_mean",
-            "wk qos rep": "wk_qos_rep_U_mean",
+            "main+qos+lb": "main_ref_lb_sat_util_mean",
+            "bk rep": "bk_rep_sat_util_mean",
+            "tgbp rep": "tgbp_rep_sat_util_mean",
+            "wk demand rep": "wk_demand_rep_sat_util_mean",
+            "wk qos rep": "wk_qos_rep_sat_util_mean",
         },
-        title="Mean utilization vs user count",
-        ylabel="U_mean",
-        out_path=os.path.join(out_dir, "Umean_vs_nusers.png"),
+        title="Satellite utilization (mean) vs user count",
+        ylabel="sat utilization",
+        out_path=os.path.join(out_dir, "sat_util_mean_vs_nusers.png"),
         show=show,
     )
 
@@ -542,18 +542,18 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show
     )
 
-    # 8) Rigid fixed-prefix ablation: Umax
+    # 8) Rigid fixed-prefix ablation: satellite utilization max
     plot_lines_vs_nusers(
         df,
         {
-            "A0 pure+split": "ab_A0_pure_split_U_max",
-            "A1 bal+split": "ab_A1_bal_split_U_max",
-            "A2 bal+split+qos": "ab_A2_bal_split_qos_U_max",
-            "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_U_max",
+            "A0 pure+split": "ab_A0_pure_split_sat_util_max",
+            "A1 bal+split": "ab_A1_bal_split_sat_util_max",
+            "A2 bal+split+qos": "ab_A2_bal_split_qos_sat_util_max",
+            "A3 bal+split+qos+lb": "ab_A3_bal_split_qos_lb_sat_util_max",
         },
-        title="Ablation: peak utilization under fixed prefix",
-        ylabel="U_max",
-        out_path=os.path.join(out_dir, "ablation_Umax_vs_nusers.png"),
+        title="Ablation: satellite utilization (max) under fixed prefix",
+        ylabel="sat utilization",
+        out_path=os.path.join(out_dir, "ablation_sat_util_max_vs_nusers.png"),
         show=show,
     )
 
@@ -587,17 +587,17 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         show=show,
     )
 
-    # 11) System-level association comparison: Umax
+    # 11) System-level association comparison: satellite utilization max
     plot_lines_vs_nusers(
         df,
         {
-            "pure max elev": "sys_pure_max_elev_U_max",
-            "balanced max elev": "sys_balanced_max_elev_U_max",
-            "max service time": "sys_max_service_time_U_max",
+            "pure max elev": "sys_pure_max_elev_sat_util_max",
+            "balanced max elev": "sys_balanced_max_elev_sat_util_max",
+            "max service time": "sys_max_service_time_sat_util_max",
         },
-        title="System-level comparison: peak utilization under fixed prefix",
-        ylabel="U_max",
-        out_path=os.path.join(out_dir, "system_assoc_Umax_vs_nusers.png"),
+        title="System-level comparison: satellite utilization (max) under fixed prefix",
+        ylabel="sat utilization",
+        out_path=os.path.join(out_dir, "system_assoc_sat_util_max_vs_nusers.png"),
         show=show,
     )
 
@@ -670,6 +670,20 @@ def make_phaseB_plots(csv_path: str, out_dir: str, *, show: bool = False) -> Non
         out_path=os.path.join(out_dir, "runtime_vs_nusers.png"),
         show=show,
         y_log=True,
+    )
+
+    # 17) Achievable user rates
+    plot_lines_vs_nusers(
+        df,
+        {
+            "min rate":  "main_ref_lb_rate_min_mbps",
+            "mean rate": "main_ref_lb_rate_mean_mbps",
+            "max rate":  "main_ref_lb_rate_max_mbps",
+        },
+        title="Achievable user rate vs user count",
+        ylabel="Rate (Mbps)",
+        out_path=os.path.join(out_dir, "rate_min_mean_max_vs_nusers.png"),
+        show=show,
     )
 
     _write_phaseB_tables_txt(df, out_dir, csv_path=csv_path)

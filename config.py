@@ -62,8 +62,8 @@ class EnterpriseConfig:
 
     # Used only when center_mode == "qos_weighted".
     center_weight_eco: float = 1.0
-    center_weight_standard: float = 1.5
-    center_weight_enterprise: float = 6.0
+    center_weight_standard: float = 1.0
+    center_weight_enterprise: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -187,8 +187,8 @@ class PayloadConfig:
 
     # Beam-hopping / scheduling window model:
     #   per-sat time feasibility: sum_b U_{s,b} <= J_lanes * W_slots
-    J_lanes: float = 4.0
-    W_slots: int = 6
+    J_lanes: float = 16.0
+    W_slots: int = 1
 
     # Per-satellite beam count cap:
     #   per-sat beam feasibility: K_s <= Ks_max

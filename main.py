@@ -65,7 +65,6 @@ def run_parallel(configs: list[ScenarioConfig], max_workers: int | None = None) 
 
 def main():
     base = ScenarioConfig()
-    make_phaseB_plots("plots/phaseB/sweep_phaseB.csv", out_dir="plots/phaseB", show=False)
 
     # -------------------------
     # Phase A: robustness sweep
@@ -114,8 +113,8 @@ def main():
     # -------------------------
     #n_users_list = [1000, 2500, 5000, 7500, 10000, 12500, 15000]
 
-    n_users_list = [500]
-    seeds_b = list(range(1, 2))
+    n_users_list = [500, 750, 1000, 1250, 1500]
+    seeds_b = list(range(1, 4))
 
     configs_b = []
     for n in n_users_list:

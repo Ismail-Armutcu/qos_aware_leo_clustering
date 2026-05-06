@@ -197,6 +197,15 @@ def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
         np.asarray([float(np.mean(radius_km))], dtype=float) if radius_km.size > 0 else np.array([], dtype=float)
     )
 
+    all_rates = np.concatenate([ev["rate_mbps"] for ev in evals if ev.get("rate_mbps") is not None and len(ev["rate_mbps"]) > 0]) if K > 0 else np.array([], dtype=float)
+    rate_min_mbps  = float(np.min(all_rates))  if all_rates.size > 0 else float("nan")
+    rate_max_mbps  = float(np.max(all_rates))  if all_rates.size > 0 else float("nan")
+    rate_mean_mbps = float(np.mean(all_rates)) if all_rates.size > 0 else float("nan")
+
+    T_cap = float(cfg.payload.W_slots) * float(cfg.payload.J_lanes)
+    T_s = float(np.sum(U))
+    sat_util = (T_s / T_cap) if T_cap > 0 else float("nan")
+
     return {
         "K": int(K),
         "feasible_rate": float(feasible_rate),
@@ -212,6 +221,12 @@ def summarize(users: Users, cfg: ScenarioConfig, clusters, evals) -> dict:
         "ent_z_max": float(ent_z_max),
         **radius_stats,
         **sat_radius_stats,
+        "rate_min_mbps":  rate_min_mbps,
+        "rate_max_mbps":  rate_max_mbps,
+        "rate_mean_mbps": rate_mean_mbps,
+        "sat_util_mean": sat_util,
+        "sat_util_max":  sat_util,
+        "sat_util_min":  sat_util,
     }
 
 
@@ -226,6 +241,7 @@ def summarize_multisat(
     ent_exposed = 0
     ent_z_all = []
     total_K = 0
+    sat_T_list: list[float] = []
 
     for users_sat, clusters, evals in pieces:
         total_K += len(clusters)
@@ -235,10 +251,13 @@ def summarize_multisat(
         feasible_flags.extend([bool(ev.get("feasible", False)) for ev in evals])
         risk_sum += float(np.sum([ev.get("risk", 0.0) for ev in evals]))
 
+        sat_T = 0.0
         for ev in evals:
             u = ev.get("U", None)
             if u is not None and not np.isnan(u):
                 all_U.append(float(u))
+                sat_T += float(u)
+        sat_T_list.append(sat_T)
 
         ent_total += int((users_sat.qos_w == 4).sum())
 
@@ -283,6 +302,18 @@ def summarize_multisat(
     radius_stats = _radius_stats_km_from_values(np.asarray(radius_all_km, dtype=float))
     sat_radius_stats = _sat_mean_radius_stats_km_from_values(np.asarray(sat_mean_radius_km, dtype=float))
 
+    all_rates_pieces = [ev["rate_mbps"] for _u, _c, evals_sat in pieces for ev in evals_sat if ev.get("rate_mbps") is not None and len(ev["rate_mbps"]) > 0]
+    all_rates = np.concatenate(all_rates_pieces) if all_rates_pieces else np.array([], dtype=float)
+    rate_min_mbps  = float(np.min(all_rates))  if all_rates.size > 0 else float("nan")
+    rate_max_mbps  = float(np.max(all_rates))  if all_rates.size > 0 else float("nan")
+    rate_mean_mbps = float(np.mean(all_rates)) if all_rates.size > 0 else float("nan")
+
+    T_cap = float(cfg.payload.W_slots) * float(cfg.payload.J_lanes)
+    sat_utils_arr = np.asarray([T_s / T_cap for T_s in sat_T_list], dtype=float) if T_cap > 0 else np.array([], dtype=float)
+    sat_util_mean = float(np.mean(sat_utils_arr)) if sat_utils_arr.size > 0 else float("nan")
+    sat_util_max  = float(np.max(sat_utils_arr))  if sat_utils_arr.size > 0 else float("nan")
+    sat_util_min  = float(np.min(sat_utils_arr))  if sat_utils_arr.size > 0 else float("nan")
+
     return {
         "K": int(total_K),
         "feasible_rate": float(feasible_rate),
@@ -298,6 +329,12 @@ def summarize_multisat(
         "ent_z_max": float(ent_z_max),
         **radius_stats,
         **sat_radius_stats,
+        "rate_min_mbps":  rate_min_mbps,
+        "rate_max_mbps":  rate_max_mbps,
+        "rate_mean_mbps": rate_mean_mbps,
+        "sat_util_mean": sat_util_mean,
+        "sat_util_max":  sat_util_max,
+        "sat_util_min":  sat_util_min,
     }
 
 
@@ -380,6 +417,9 @@ def _nan_summary() -> dict[str, Any]:
         "sat_mean_radius_mean_km": nan,
         "sat_mean_radius_min_km": nan,
         "sat_mean_radius_max_km": nan,
+        "sat_util_mean": nan,
+        "sat_util_max":  nan,
+        "sat_util_min":  nan,
     }
 
 
